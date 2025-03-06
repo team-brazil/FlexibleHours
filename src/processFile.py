@@ -144,8 +144,25 @@ def classify_job(body):
 def process_batch(batch):
     return [classify_job(body) for body in batch]
 
+def calculate_dispersion(row, num_loops):
+    """
+    Calcula a dispersão para uma linha, comparando os resultados de 'undesired_flexibility' em diferentes loops.
 
-def main():
+    Args:
+        row: Uma linha do DataFrame.
+        num_loops: O número de loops executados.
+
+    Returns:
+        str: "Yes" se houver dispersão, "No" se não houver.
+    """
+    results = [row[f'undesired_flexibility_{i}'] for i in range(1, num_loops + 1)]
+    if len(set(results)) > 1:
+        return "Yes"  # Há dispersão
+    else:
+        return "No"  # Não há dispersão
+
+
+def main(num_loops=10):
     # Ler os arquivos
     df = ler_arquivos_input()
     if df is None:
@@ -156,19 +173,26 @@ def main():
 
     # Prepare data for batch processing
     batch_size = 100  # Adjust as needed
-    batches = [df[body_column][i:i + batch_size].tolist() for i in range(0, len(df), batch_size)]
 
-    # Parallel processing
-    with multiprocessing.Pool(processes=multiprocessing.cpu_count()) as pool:
-        results = list(tqdm(pool.imap(process_batch, batches), total=len(batches)))
+    for i in range(1, num_loops + 1):
+        logging.info(f"Starting loop {i}...")
+        batches = [df[body_column][j:j + batch_size].tolist() for j in range(0, len(df), batch_size)]
 
-    # Flatten the results
-    flattened_results = [item for sublist in results for item in sublist]
+        # Parallel processing
+        with multiprocessing.Pool(processes=multiprocessing.cpu_count()) as pool:
+            results = list(tqdm(pool.imap(process_batch, batches), total=len(batches)))
 
-    # Add results to the DataFrame
-    df['undesired_flexibility'], df['reason'] = zip(*flattened_results)
+        # Flatten the results
+        flattened_results = [item for sublist in results for item in sublist]
 
-    # Salvar em Excel
+        # Add results to the DataFrame
+        df[f'undesired_flexibility_{i}'], df[f'reason_{i}'] = zip(*flattened_results)
+
+    # Calcular a dispersão
+    logging.info("Calculating dispersion...")
+    df['dispersion'] = df.apply(calculate_dispersion, axis=1, num_loops=num_loops)
+
+    # Save
     output_filepath = os.path.join("../output", "Test_NTLK.xlsx")
     try:
         df.to_excel(output_filepath, index=False, engine='openpyxl')

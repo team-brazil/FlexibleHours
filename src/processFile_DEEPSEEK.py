@@ -1,17 +1,25 @@
 import pandas as pd
-import requests
+import google.generativeai as genai
 import json
 import os
-from openai import OpenAI
 from dotenv import load_dotenv
+import logging
+from tqdm import tqdm
+import time
+import re
+import multiprocessing
+from google.api_core import exceptions as google_exceptions  # Importação correta
+
+# Configurar o logging
+logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - %(message)s')
 
 
-def ler_arquivos_input(diretorio="input"):
+def ler_arquivos_input(diretorio="../input"):
     """
-    Lê arquivos CSV e XLSX do diretório 'input' e retorna uma lista de descrições de vagas.
+    Lê arquivos CSV e XLSX do diretório 'input' e retorna um DataFrame.
     Assume que os arquivos têm uma coluna chamada 'BODY'.
     """
-    descricoes = []
+    df_list = []
     for filename in os.listdir(diretorio):
         if filename.startswith("~$"):  # Ignora arquivos temporários do Excel
             continue
@@ -19,102 +27,159 @@ def ler_arquivos_input(diretorio="input"):
         filepath = os.path.join(diretorio, filename)
         try:
             if filename.endswith(".csv"):
-                df = pd.read_csv(filepath, encoding="utf-8")
+                temp_df = pd.read_csv(filepath, encoding="utf-8")
             elif filename.endswith(".xlsx"):
-                df = pd.read_excel(filepath, engine='openpyxl')
+                temp_df = pd.read_excel(filepath, engine='openpyxl')
             else:
+                logging.warning(f"Arquivo {filename} não é .csv ou .xlsx. Ignorando.")
                 continue
 
             # Verifica se a coluna 'BODY' existe no DataFrame
-            if 'BODY' in df.columns:
-                # Converte todos os valores da coluna 'BODY' para string e remove valores nulos
-                df['BODY'] = df['BODY'].astype(str).replace('nan', '').replace('None', '')
-                descricoes.extend(df['BODY'].tolist())  # Chama o método tolist()
-            else:
-                print(f"Aviso: Arquivo {filename} não possui a coluna 'BODY'. Ignorando.")
+            if 'body' not in temp_df.columns.str.lower().tolist():
+                logging.warning(f"Arquivo {filename} não possui a coluna 'BODY'. Ignorando.")
+                continue
+            df_list.append(temp_df)
+
         except Exception as e:
-            print(f"Erro ao ler o arquivo {filename}: {e}")
+            logging.error(f"Erro ao ler o arquivo {filename}: {e}")
 
-    return descricoes
+    if not df_list:
+        logging.warning("Nenhum arquivo válido encontrado ou processado. Verifique os arquivos na pasta 'input'.")
+        return None
 
-
-def avaliar_flexibilidade_gemini(descricao, api_key, api_url, config):
-    client = OpenAI(api_key=api_key, base_url=api_url)
-
-    try:
-        response = client.chat.completions.create(
-            model="deepseek-chat",
-            messages=[
-                {"role": "system", "content": "You are a helpful assistant"},
-                {"role": "user", "content": "Hello"},
-            ],
-            stream=False
-        )
-        resultado = response.json
-
-        classificacao = resultado.get('classificacao', 'Não')
-        justificativa = resultado.get('justificativa', 'Sem justificativa')
-
-        return classificacao, justificativa
-
-    except requests.exceptions.RequestException as e:
-        print(f"Erro na requisição à API DeepSeek: {e}")
-        return "Erro", f"Erro ao acessar a API: {e}"
-    except json.JSONDecodeError as e:
-        print(f"Erro ao decodificar a resposta JSON: {e}")
-        return "Erro", f"Erro ao decodificar a resposta da API: {e}"
-    except Exception as e:
-        print(f"Erro inesperado: {e}")
-        return "Erro", f"Erro inesperado: {e}"
+    return pd.concat(df_list, ignore_index=True)
 
 
-def salvar_resultados_csv(descricoes, classificacoes, justificativas, diretorio="output", nome_arquivo="resultados.csv"):
+def avaliar_flexibilidade_gemini(descricao, api_key, max_retries=3):
+    """Avalia a flexibilidade de uma descrição de vaga usando o modelo Gemini."""
+    genai.configure(api_key=api_key, transport="rest")
+    model = genai.GenerativeModel('gemini-1.5-flash')
+    prompt = (
+        "Você é um especialista em análise de vagas de emprego. "
+        "Seu objetivo é identificar se uma vaga de emprego apresenta 'flexibilidade de horas indesejada' (Undesired Flexibility). "
+        "Este é um conceito importante: 'flexibilidade de horas indesejada' acontece quando uma vaga de emprego diz "
+        "que há flexibilidade, mas essa flexibilidade é apenas para a empresa, e não para o trabalhador. "
+        "Por exemplo, a vaga pode exigir que o funcionário trabalhe em horários irregulares, finais de semana, "
+        "feriados, ou em turnos rotativos, sem oferecer a opção de escolher esses horários. Isso é diferente de uma "
+        "flexibilidade real, onde o empregado pode escolher seus horários ou tem controle sobre sua escala. "
+        "Analise o texto da proposta de emprego abaixo e determine se ele é ou não um caso de 'flexibilidade de horas indesejada'. "
+        f"Texto da proposta de emprego: {descricao}. "
+        "Responda da seguinte forma: 'undesired_flexibility': (Yes ou No) e 'reason': (sua explicação). "
+        "Responda usando um único JSON sem nenhuma outra palavra. "
+    )
+    num_retries = 0
+    while num_retries < max_retries:
+        try:
+            logging.info(f"Enviando solicitação para API Gemini com a descrição: {descricao[:100]}...")
+            response = model.generate_content(contents=prompt)
+
+            # Extrai o conteúdo JSON da resposta usando regex
+            json_match = re.search(r"```json\n(.*?)\n```", response.text, re.DOTALL)
+            if json_match:
+                json_text = json_match.group(1)
+                resposta_json = json.loads(json_text)
+            else:
+                logging.warning(f"JSON não encontrado na resposta: {response.text[:100]}...")
+                resposta_json = {"undesired_flexibility": "Erro", "reason": "JSON não encontrado na resposta"}
+
+            classificacao = resposta_json.get('undesired_flexibility', 'Não')
+            justificativa = resposta_json.get('reason', 'Sem justificativa')
+            return classificacao, justificativa
+
+        except Exception as e:
+            if "429" in str(e):
+                logging.error(f"Erro na requisição à API Gemini: {e}")
+                time.sleep(60)
+                num_retries += 1
+            else:
+                logging.error(f"Erro na requisição à API Gemini: {e}")
+                return "Erro", f"Erro ao acessar a API: {e}"
+    logging.error(f"Maximo de retries ({max_retries}) atingido.")
+    return "Erro", "Maximo de retries atingido"
+
+
+def process_batch(batch, api_keys, key_index):
+    """Processa um lote de descrições de vagas, usando uma chave de API específica."""
+    results = []
+    for i, descricao in enumerate(batch):
+        api_key = api_keys[key_index % len(api_keys)]
+        classificacao, justificativa = avaliar_flexibilidade_gemini(descricao, api_key)
+        results.append((classificacao, justificativa))
+        time.sleep(5)  # Atraso de 5 segundos entre as requisições
+    return results
+
+
+def calculate_dispersion(row, num_loops):
     """
-    Salva os resultados em um arquivo CSV no diretório 'output'.
+    Calcula a dispersão para uma linha, comparando os resultados de 'undesired_flexibility' em diferentes loops.
     """
-    data = {
-        'descricao': descricoes,
-        'flexibilidade_indesejada': classificacoes,
-        'justificativa': justificativas
-    }
-    df = pd.DataFrame(data)
-
-    # Cria o diretório se não existir
-    if not os.path.exists(diretorio):
-        os.makedirs(diretorio)
-
-    filepath = os.path.join(diretorio, nome_arquivo)
-    df.to_csv(filepath, index=False, encoding="utf-8")
+    results = [row[f'undesired_flexibility_{i}'] for i in range(1, num_loops + 1)]
+    if len(set(results)) > 1:
+        return "Yes"  # Há dispersão
+    else:
+        return "No"  # Não há dispersão
 
 
-def main():
+def main(num_loops=10, batch_size=1, num_processes=8):
     # Carrega as variáveis de ambiente do arquivo .env
     load_dotenv()
 
-    # 1. Carrega as configurações do arquivo config.json
-    with open("../config.json", "r") as f:
+    # Carrega as configurações do arquivo config.json
+    with open("config.json", "r") as f:
         config = json.load(f)
 
-    api_key = os.getenv("API_KEY") or config.get("api_key")
-    api_url = os.getenv("API_URL") or config.get("api_url")
+    api_keys = os.getenv("API_KEYS")
+    if api_keys:
+        api_keys = api_keys.split(',')
+    else:
+        api_keys = config.get("api_keys", [])
+
+    if not api_keys:
+        raise ValueError("API_KEYS não encontrados. Verifique o arquivo .env ou config.json.")
+
+    # Determinar o número de processos
+    if num_processes > len(api_keys):
+        logging.warning(
+            f"O número de processos ({num_processes}) é maior que o número de API keys ({len(api_keys)}). Reduzindo o número de processos para {len(api_keys)}.")
+        num_processes = len(api_keys)
 
     # 2. Leitura dos arquivos de entrada
-    descricoes = ler_arquivos_input()
+    df = ler_arquivos_input()
+    if df is None:
+        return
 
-    # 3. Preparação das listas para armazenar os resultados
-    classificacoes = []
-    justificativas = []
+    # Encontrar a coluna 'BODY' de forma case-insensitive
+    body_column = next((col for col in df.columns if col.lower() == 'body'), None)
 
-    # 4. Avaliação de cada descrição de vaga
-    for descricao in descricoes:
-        classificacao, justificativa = avaliar_flexibilidade_gemini(descricao, api_key, api_url, config)
-        classificacoes.append(classificacao)
-        justificativas.append(justificativa)
+    for i in range(1, num_loops + 1):
+        logging.info(f"Starting loop {i}...")
+        df[f'undesired_flexibility_{i}'] = ""
+        df[f'reason_{i}'] = ""
 
-    # 5. Armazenamento dos resultados em um arquivo CSV
-    salvar_resultados_csv(descricoes, classificacoes, justificativas)
+        batches = [df[body_column][j:j + batch_size].tolist() for j in range(0, len(df), batch_size)]
 
-    print("Processamento concluído. Resultados salvos em output/resultados.csv")
+        # Prepare os argumentos para starmap, distribuindo as chaves
+        args_list = [(batch, api_keys, j) for j, batch in enumerate(batches)]
+
+        with multiprocessing.Pool(processes=num_processes) as pool:
+            results = list(tqdm(pool.starmap(process_batch, args_list), total=len(args_list)))
+
+        flattened_results = [item for sublist in results for item in sublist]
+        df[f'undesired_flexibility_{i}'], df[f'reason_{i}'] = zip(*flattened_results)
+
+    # Calcular a dispersão
+    logging.info("Calculating dispersion...")
+    df['dispersion'] = df.apply(calculate_dispersion, axis=1, num_loops=num_loops)
+
+    # Save
+    output_filepath = os.path.join("../output", "Test_Gemini.xlsx")
+    try:
+        df.to_excel(output_filepath, index=False, engine='openpyxl')
+        logging.info(f"Arquivo salvo com sucesso em: {output_filepath}")
+    except Exception as e:
+        logging.error(f"Erro ao salvar o arquivo Excel: {e}")
+
+    print("Processamento concluído. Resultados salvos em output/Test_Gemini.xlsx")
 
 
 if __name__ == "__main__":
