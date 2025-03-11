@@ -52,6 +52,7 @@ def ler_arquivos_input(diretorio="../input"):
 
 def avaliar_flexibilidade_gemini(descricao, api_key, max_retries=3):
     """Avalia a flexibilidade de uma descrição de vaga usando o modelo Gemini."""
+    time.sleep(4)
     genai.configure(api_key=api_key, transport="rest")
     model = genai.GenerativeModel('gemini-1.5-flash')
     prompt = (
@@ -105,7 +106,6 @@ def process_batch(batch, api_keys, key_index):
         api_key = api_keys[key_index % len(api_keys)]
         classificacao, justificativa = avaliar_flexibilidade_gemini(descricao, api_key)
         results.append((classificacao, justificativa))
-        time.sleep(5)  # Atraso de 5 segundos entre as requisições
     return results
 
 
@@ -120,7 +120,7 @@ def calculate_dispersion(row, num_loops):
         return "No"  # Não há dispersão
 
 
-def main(num_loops=10, batch_size=1, num_processes=8):
+def main(num_loops=10, batch_size=1, num_processes=2):
     # Carrega as variáveis de ambiente do arquivo .env
     load_dotenv()
 

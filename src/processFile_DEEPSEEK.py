@@ -25,6 +25,7 @@ def avaliar_flexibilidade_deepseek(descricao, ollama_url="http://localhost:11434
         "Por exemplo, a vaga pode exigir que o funcionário trabalhe em horários irregulares, finais de semana, "
         "feriados, ou em turnos rotativos, sem oferecer a opção de escolher esses horários. Isso é diferente de uma "
         "flexibilidade real, onde o empregado pode escolher seus horários ou tem controle sobre sua escala. "
+        "Analise o texto da proposta de emprego abaixo e determine se ele é ou não um caso de 'flexibilidade de horas indesejada'. "
         f"Texto da proposta de emprego: {descricao}. "
         "Responda da seguinte forma: 'undesired_flexibility': (Yes ou No) e 'reason': (sua explicação). "
         "Responda usando um único JSON sem nenhuma outra palavra. "
@@ -79,7 +80,6 @@ def avaliar_flexibilidade_deepseek(descricao, ollama_url="http://localhost:11434
         return "Erro", str(e)
 
 
-
 def ler_arquivos_input(diretorio="../input"):
     """Lê arquivos CSV e XLSX do diretório 'input' e retorna um DataFrame."""
     df_list = []
@@ -130,7 +130,7 @@ def calculate_dispersion(row, num_loops):
     return "Yes" if len(set(results)) > 1 else "No"
 
 
-def main(num_loops=10, batch_size=1):
+def main(num_loops=1, batch_size=1):
     """Função principal."""
 
     # 1. Leitura dos arquivos de entrada
@@ -157,7 +157,7 @@ def main(num_loops=10, batch_size=1):
     df["dispersion"] = df.apply(calculate_dispersion, axis=1, num_loops=num_loops)
 
     # 3. Salvar os resultados
-    output_filepath = os.path.join("../output", "Test_DeepSeek.xlsx")
+    output_filepath = os.path.join("../output", "Test_Local.xlsx")
     try:
         df.to_excel(output_filepath, index=False, engine="openpyxl")
         logging.info(f"Arquivo salvo com sucesso em: {output_filepath}")
@@ -165,6 +165,7 @@ def main(num_loops=10, batch_size=1):
         logging.error(f"Erro ao salvar o arquivo Excel: {e}")
 
     logging.info("Processamento concluído.")
+
 
 if __name__ == "__main__":
     main()
