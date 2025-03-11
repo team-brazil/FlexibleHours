@@ -6,6 +6,7 @@ import multiprocessing
 from tqdm import tqdm
 from nltk.corpus import stopwords
 from nltk.stem import WordNetLemmatizer
+from nltk.corpus import wordnet
 import logging
 
 # Configurar o logging
@@ -31,19 +32,10 @@ except LookupError:
     nltk.download('vader_lexicon')
 
 
-def ler_arquivos_input(diretorio="../input"):
-    """
-    Lê os arquivos .csv ou .xlsx do diretório especificado.
-
-    Args:
-        diretorio (str): O diretório onde os arquivos estão localizados.
-
-    Returns:
-        pandas.DataFrame: Um DataFrame contendo os dados lidos ou None se nenhum arquivo foi processado.
-    """
+def read_input_files(diretorio="../input"):
     df_list = []
     for filename in os.listdir(diretorio):
-        if filename.startswith("~$"):  # Ignora arquivos temporários do Excel
+        if filename.startswith("~$"):
             continue
 
         filepath = os.path.join(diretorio, filename)
@@ -53,20 +45,20 @@ def ler_arquivos_input(diretorio="../input"):
             elif filename.endswith(".xlsx"):
                 temp_df = pd.read_excel(filepath, engine='openpyxl')
             else:
-                logging.warning(f"Arquivo {filename} não é .csv ou .xlsx. Ignorando.")
+                logging.warning(f"File {filename}  is not .csv or .xlsx. Ignoring.")
                 continue
 
             # Verificar se a coluna 'BODY' existe
             if 'body' not in temp_df.columns.str.lower().tolist():
-                logging.warning(f"Arquivo {filename} não possui a coluna 'BODY'. Ignorando.")
+                logging.warning(f"File {filename} does not have the 'BODY' column. Ignoring.")
                 continue
             df_list.append(temp_df)
 
         except Exception as e:
-            logging.error(f"Erro ao ler o arquivo {filename}: {e}")
+            logging.error(f"Error reading file {filename}: {e}")
 
     if not df_list:
-        logging.warning("Nenhum arquivo válido encontrado ou processado. Verifique os arquivos na pasta 'input'.")
+        logging.warning("No valid files found or processed. Check files in the 'input' folder'.")
         return None
 
     return pd.concat(df_list, ignore_index=True)
@@ -76,6 +68,7 @@ def preprocess_text(text):
     if not isinstance(text, str):
         return ""
     # Simple tokenization
+    text = text.lower()
     tokens = re.findall(r'\b\w+\b', text.lower())
     stop_words = set(stopwords.words('english'))
     tokens = [token for token in tokens if token not in stop_words]
@@ -88,7 +81,6 @@ def preprocess_text(text):
 
 def analyze_undesired_flexibility(body):
     preprocessed_body = preprocess_text(body)
-
     patterns = [
         (r'\bflexib\w+\s+(hour|schedule|time|shift)', "Flexible hours/schedule"),
         (r'\b(full-time|part-time).*and.*(full-time|part-time)', "Combination of full-time and part-time"),
@@ -108,12 +100,23 @@ def analyze_undesired_flexibility(body):
         (r'extended.*hour', "Extended hours"),
         (r'(availab\w+|work).*\b(weekend|holiday)', "Weekend or holiday availability"),
         (r'shift.*\b(assign\w+|schedule)', "Variable shift assignment"),
+        (r'\b(work|schedule|hour).*demand', "Work on demand"),
+        (r'\b(as|when).*needed', "As needed"),
+        (r'\b(subject\s+to|depend.*on|accord.*to).*availability', "Subject to availability"),
+        (r'unpredict\w+\s+(hour|schedule)', "Unpredictable hours"),
+        (r'total\s+availability', "Total availability"),
+        (r'complete\s+flexibility', "Complete flexibility"),
+        (r'no\s+choice\s+of\s+schedule', "No choice of schedule"),
+        (r'non[- ]negotiable\s+(hour|schedule)', "Non-negotiable hours"),
+        (r'\b(must|require).*flexible', "Must be flexible"),
+        (r'(hour|schedule|shift).*vary.*without.*notice', "Hours vary without notice"),
+        (r'flexib.*\b(meet|suit|accommodate|for)\b.*(company|business|employer|need|demand)', "Flexibility to meet company needs"),
+        (r'rotat\w+\s+(shift|schedule|roster)', "Rotating shifts/schedule"),
+        (r'on[- ]call.*(emergenc|urgent)', "On-call for emergencies"),
+        (r'(part[- ]time|casual).*(flexib|as\s+needed|when\s+needed)', "Part-time/casual with flexibility"),
+        (r'remote.*(irregular|unpredict\w+|vary).*hour', "Remote work with irregular hours"),
+        (r'travel.*(require|necess).*flexib', "Travel requiring flexibility"),
     ]
-
-    reasons = []
-    for pattern, reason in patterns:
-        if re.search(pattern, preprocessed_body):
-            reasons.append(reason)
 
     contexts = [
         ('flexib', 'schedule', "Flexible schedule"),
@@ -123,8 +126,37 @@ def analyze_undesired_flexibility(body):
         ('hour', 'vary', "Variable hours"),
         ('business', 'need', "Based on business needs"),
         ('overtime', 'require', "Required overtime"),
+        ('remote', 'total availability', "Remote work with total availability"),
+        ('on-call', 'emergency', "On-call for emergencies"),
+        ('casual', 'flexible', "Casual work with flexibility"),
+        ('shift', 'rotate', "Rotating shifts"),
+        ('hour', 'unpredict', "Unpredictable hours"),
+        ('schedule', 'vary', "Variable schedule"),
+        ('flexib', 'company', "Flexibility for the company"),
+        ('flexib', 'business', "Flexibility for the business"),
     ]
 
+    reasons = []
+
+    # --- Pattern matching with synonyms ---
+    for pattern, reason in patterns:
+        for word in re.findall(r'\b\w+\b', pattern):
+            for syn in wordnet.synsets(word):
+                for lemma in syn.lemmas():
+                    new_pattern = pattern.replace(word, lemma.name())
+                    # --- Escape the replacement ---
+                    new_pattern = re.escape(new_pattern)  # Escape special characters
+                    if re.search(new_pattern, preprocessed_body):
+                        reasons.append(reason)
+                        break  # Break inner loop if a synonym matches
+                else:
+                    continue  # Continue if no synonyms match
+                break  # Break outer loop if a synonym matches
+        else:
+            if re.search(pattern, preprocessed_body):
+                reasons.append(reason)
+
+    # --- Contextual analysis with synonyms ---
     for word1, word2, reason in contexts:
         if word1 in preprocessed_body and word2 in preprocessed_body:
             if reason not in reasons:
@@ -144,35 +176,25 @@ def classify_job(body):
 def process_batch(batch):
     return [classify_job(body) for body in batch]
 
+
 def calculate_dispersion(row, num_loops):
-    """
-    Calcula a dispersão para uma linha, comparando os resultados de 'undesired_flexibility' em diferentes loops.
-
-    Args:
-        row: Uma linha do DataFrame.
-        num_loops: O número de loops executados.
-
-    Returns:
-        str: "Yes" se houver dispersão, "No" se não houver.
-    """
     results = [row[f'undesired_flexibility_{i}'] for i in range(1, num_loops + 1)]
     if len(set(results)) > 1:
-        return "Yes"  # Há dispersão
+        return "Yes"
     else:
-        return "No"  # Não há dispersão
+        return "No"
 
 
-def main(num_loops=10):
-    # Ler os arquivos
-    df = ler_arquivos_input()
+def main(num_loops=1):
+    df = read_input_files()
     if df is None:
         return
 
-    # Encontrar a coluna 'BODY' de forma case-insensitive
+    # Find 'BODY' column with case-insensitive
     body_column = next((col for col in df.columns if col.lower() == 'body'), None)
 
     # Prepare data for batch processing
-    batch_size = 100  # Adjust as needed
+    batch_size = 100
 
     for i in range(1, num_loops + 1):
         logging.info(f"Starting loop {i}...")
@@ -188,12 +210,12 @@ def main(num_loops=10):
         # Add results to the DataFrame
         df[f'undesired_flexibility_{i}'], df[f'reason_{i}'] = zip(*flattened_results)
 
-    # Calcular a dispersão
+    # calculate dispertio
     logging.info("Calculating dispersion...")
     df['dispersion'] = df.apply(calculate_dispersion, axis=1, num_loops=num_loops)
 
     # Save
-    output_filepath = os.path.join("../output", "Test_NTLK.xlsx")
+    output_filepath = os.path.join("../output", "Test_NTLK_new.xlsx")
     try:
         df.to_excel(output_filepath, index=False, engine='openpyxl')
         logging.info(f"Arquivo salvo com sucesso em: {output_filepath}")

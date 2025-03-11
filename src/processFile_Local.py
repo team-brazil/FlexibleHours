@@ -146,11 +146,11 @@ def main(num_loops=1, batch_size=1):
             df.loc[index, f"undesired_flexibility_{i}"] = unwanted_flexibility
             df.loc[index, f"reason_{i}"] = justification
 
-    # 2. Calcular a dispersão
+    # Calculate dispertion
     logging.info("Calculating dispersion...")
     df["dispersion"] = df.apply(calculate_dispersion, axis=1, num_loops=num_loops)
 
-    # 3. Salvar os resultados
+    # Saving files
     output_filepath = os.path.join("../output", "Test_Local.xlsx")
     try:
         df.to_excel(output_filepath, index=False, engine="openpyxl")
