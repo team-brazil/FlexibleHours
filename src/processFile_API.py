@@ -8,20 +8,18 @@ from tqdm import tqdm
 import time
 import re
 import multiprocessing
-from google.api_core import exceptions as google_exceptions  # Importação correta
 
-# Configurar o logging
 logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - %(message)s')
 
 
-def ler_arquivos_input(diretorio="../input"):
+def read_input_files(diretorio="../input"):
     """
-    Lê arquivos CSV e XLSX do diretório 'input' e retorna um DataFrame.
-    Assume que os arquivos têm uma coluna chamada 'BODY'.
+    Reads CSV and XLSX files from the 'input' directory and returns a DataFrame.
+    Assumes the files have a column named 'BODY'.
     """
     df_list = []
     for filename in os.listdir(diretorio):
-        if filename.startswith("~$"):  # Ignora arquivos temporários do Excel
+        if filename.startswith("~$"):
             continue
 
         filepath = os.path.join(diretorio, filename)
@@ -34,97 +32,91 @@ def ler_arquivos_input(diretorio="../input"):
                 logging.warning(f"Arquivo {filename} não é .csv ou .xlsx. Ignorando.")
                 continue
 
-            # Verifica se a coluna 'BODY' existe no DataFrame
+            # Checks if column 'BODY' exists in DataFrame
             if 'body' not in temp_df.columns.str.lower().tolist():
-                logging.warning(f"Arquivo {filename} não possui a coluna 'BODY'. Ignorando.")
+                logging.warning(f"File {filename} does not have the 'BODY' column. Ignoring.")
                 continue
             df_list.append(temp_df)
 
         except Exception as e:
-            logging.error(f"Erro ao ler o arquivo {filename}: {e}")
+            logging.error(f"Error reading file {filename}: {e}")
 
     if not df_list:
-        logging.warning("Nenhum arquivo válido encontrado ou processado. Verifique os arquivos na pasta 'input'.")
+        logging.warning("No valid files found or processed. Check files in the 'input' folder.")
         return None
 
     return pd.concat(df_list, ignore_index=True)
 
 
-def avaliar_flexibilidade_gemini(descricao, api_key, max_retries=3):
-    """Avalia a flexibilidade de uma descrição de vaga usando o modelo Gemini."""
+def evaluate_flexibility_hours_gemini(description, api_key, max_retries=3):
+    """Evaluate the flexibility of a job description using the Gemini model."""
     time.sleep(4)
     genai.configure(api_key=api_key, transport="rest")
     model = genai.GenerativeModel('gemini-1.5-flash')
     prompt = (
-        "Você é um especialista em análise de vagas de emprego. "
-        "Seu objetivo é identificar se uma vaga de emprego apresenta 'flexibilidade de horas indesejada' (Undesired Flexibility). "
-        "Este é um conceito importante: 'flexibilidade de horas indesejada' acontece quando uma vaga de emprego diz "
-        "que há flexibilidade, mas essa flexibilidade é apenas para a empresa, e não para o trabalhador. "
-        "Por exemplo, a vaga pode exigir que o funcionário trabalhe em horários irregulares, finais de semana, "
-        "feriados, ou em turnos rotativos, sem oferecer a opção de escolher esses horários. Isso é diferente de uma "
-        "flexibilidade real, onde o empregado pode escolher seus horários ou tem controle sobre sua escala. "
-        "Analise o texto da proposta de emprego abaixo e determine se ele é ou não um caso de 'flexibilidade de horas indesejada'. "
-        f"Texto da proposta de emprego: {descricao}. "
-        "Responda da seguinte forma: 'undesired_flexibility': (Yes ou No) e 'reason': (sua explicação). "
-        "Responda usando um único JSON sem nenhuma outra palavra. "
+        "You are an expert in job vacancy analysis. "
+        "Your goal is to identify if a job vacancy presents 'Undesired Flexibility'. "
+        "This is an important concept: 'Undesired Flexibility' occurs when a job vacancy claims "
+        "to offer flexibility, but this flexibility is only for the company, not for the worker. "
+        "For example, the job may require the employee to work irregular hours, weekends, "
+        "holidays, or rotating shifts, without offering the option to choose these hours. This is different from "
+        "real flexibility, where the employee can choose their hours or has control over their schedule. "
+        "Analyze the job proposal text below and determine whether it is a case of 'Undesired Flexibility' or not. "
+        f"Job proposal text: {description}. "
+        "Respond in the following format: 'undesired_flexibility': (Yes or No) and 'reason': (your explanation). "
+        "Respond using a single JSON without any other words. "
     )
     num_retries = 0
     while num_retries < max_retries:
         try:
-            logging.info(f"Enviando solicitação para API Gemini com a descrição: {descricao[:100]}...")
+            logging.info(f"Sending request to Gemini API with description: {description[:100]}...")
             response = model.generate_content(contents=prompt)
 
-            # Extrai o conteúdo JSON da resposta usando regex
             json_match = re.search(r"```json\n(.*?)\n```", response.text, re.DOTALL)
             if json_match:
                 json_text = json_match.group(1)
                 resposta_json = json.loads(json_text)
             else:
-                logging.warning(f"JSON não encontrado na resposta: {response.text[:100]}...")
-                resposta_json = {"undesired_flexibility": "Erro", "reason": "JSON não encontrado na resposta"}
+                logging.warning(f"JSON not found in response:: {response.text[:100]}...")
+                resposta_json = {"undesired_flexibility": "Erro", "reason": "JSON not found in response"}
 
-            classificacao = resposta_json.get('undesired_flexibility', 'Não')
-            justificativa = resposta_json.get('reason', 'Sem justificativa')
-            return classificacao, justificativa
+            unwanted_flexibility = resposta_json.get('undesired_flexibility', 'Não')
+            reason = resposta_json.get('reason', 'No justification')
+            return unwanted_flexibility, reason
 
         except Exception as e:
             if "429" in str(e):
-                logging.error(f"Erro na requisição à API Gemini: {e}")
+                logging.error(f"Error requesting Gemini API: {e}")
                 time.sleep(60)
                 num_retries += 1
             else:
-                logging.error(f"Erro na requisição à API Gemini: {e}")
-                return "Erro", f"Erro ao acessar a API: {e}"
-    logging.error(f"Maximo de retries ({max_retries}) atingido.")
-    return "Erro", "Maximo de retries atingido"
+                logging.error(f"Error requesting Gemini API: {e}")
+                return "Erro", f"Error accessing API: {e}"
+    logging.error(f"Maximum retries ({max_retries}) reached.")
+    return "Erro", "Maximum retries reached."
 
 
 def process_batch(batch, api_keys, key_index):
-    """Processa um lote de descrições de vagas, usando uma chave de API específica."""
+    """Processes a batch of job descriptions using a specific API key."""
     results = []
-    for i, descricao in enumerate(batch):
+    for i, description in enumerate(batch):
         api_key = api_keys[key_index % len(api_keys)]
-        classificacao, justificativa = avaliar_flexibilidade_gemini(descricao, api_key)
-        results.append((classificacao, justificativa))
+        unwanted_flexibility, reason = evaluate_flexibility_hours_gemini(description, api_key)
+        results.append((unwanted_flexibility, reason))
     return results
 
 
 def calculate_dispersion(row, num_loops):
-    """
-    Calcula a dispersão para uma linha, comparando os resultados de 'undesired_flexibility' em diferentes loops.
-    """
     results = [row[f'undesired_flexibility_{i}'] for i in range(1, num_loops + 1)]
     if len(set(results)) > 1:
-        return "Yes"  # Há dispersão
+        return "Yes"  
     else:
-        return "No"  # Não há dispersão
+        return "No"  
 
 
 def main(num_loops=10, batch_size=1, num_processes=2):
-    # Carrega as variáveis de ambiente do arquivo .env
     load_dotenv()
 
-    # Carrega as configurações do arquivo config.json
     with open("config.json", "r") as f:
         config = json.load(f)
 
@@ -135,20 +127,19 @@ def main(num_loops=10, batch_size=1, num_processes=2):
         api_keys = config.get("api_keys", [])
 
     if not api_keys:
-        raise ValueError("API_KEYS não encontrados. Verifique o arquivo .env ou config.json.")
+        raise ValueError("API_KEYS not found. Check .env or config.json file")
 
-    # Determinar o número de processos
     if num_processes > len(api_keys):
         logging.warning(
-            f"O número de processos ({num_processes}) é maior que o número de API keys ({len(api_keys)}). Reduzindo o número de processos para {len(api_keys)}.")
+            f"The number of processes ({num_processes}) is greater than the number of API keys ({len(api_keys)}). Reducing the number of processes to {len(api_keys)}.")
         num_processes = len(api_keys)
 
-    # 2. Leitura dos arquivos de entrada
-    df = ler_arquivos_input()
+    #Reading input files
+    df = read_input_files()
     if df is None:
         return
 
-    # Encontrar a coluna 'BODY' de forma case-insensitive
+    # Find 'BODY' column with case-insensitive
     body_column = next((col for col in df.columns if col.lower() == 'body'), None)
 
     for i in range(1, num_loops + 1):
@@ -158,7 +149,7 @@ def main(num_loops=10, batch_size=1, num_processes=2):
 
         batches = [df[body_column][j:j + batch_size].tolist() for j in range(0, len(df), batch_size)]
 
-        # Prepare os argumentos para starmap, distribuindo as chaves
+        # # Prepare arguments for starmap, distributing keys
         args_list = [(batch, api_keys, j) for j, batch in enumerate(batches)]
 
         with multiprocessing.Pool(processes=num_processes) as pool:
@@ -175,11 +166,11 @@ def main(num_loops=10, batch_size=1, num_processes=2):
     output_filepath = os.path.join("../output", "Test_Gemini.xlsx")
     try:
         df.to_excel(output_filepath, index=False, engine='openpyxl')
-        logging.info(f"Arquivo salvo com sucesso em: {output_filepath}")
+        logging.info(f"File saved successfully in: {output_filepath}")
     except Exception as e:
-        logging.error(f"Erro ao salvar o arquivo Excel: {e}")
+        logging.error(f"Error saving Excel file: {e}")
 
-    print("Processamento concluído. Resultados salvos em output/Test_Gemini.xlsx")
+    print("Processing completed. Results saved in output/Test_Gemini.xlsx")
 
 
 if __name__ == "__main__":
