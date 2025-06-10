@@ -13,35 +13,67 @@ logging.basicConfig(
 
 
 def evaluate_hour_flexibility_local(description, ollama_url="http://localhost:11434/api/generate"):
-    prompt = (
-        "You are an expert in job vacancy analysis. "
-        "Your goal is to identify if a job vacancy presents 'Undesired Flexibility'. "
-        "This is an important concept: 'Undesired Flexibility' occurs when a job vacancy claims "
-        "to offer flexibility, but this flexibility is only for the company, not for the worker. "
-        "For example, the job may require the employee to work irregular hours, weekends, "
-        "holidays, or rotating shifts, without offering the option to choose these hours. This is different from "
-        "real flexibility, where the employee can choose their hours or has control over their schedule. "
-        "Analyze the job proposal text below and determine whether it is a case of 'Undesired Flexibility' or not. "
-        f"Job proposal text: {description}. "
-        "Respond in the following format: 'undesired_flexibility': (Yes or No) and 'reason': (your explanation). "
-        "Respond using a single JSON without any other words. "
-    )
+    prompt = f"""
+    You are a specialized JSON-generating bot. Your ONLY output MUST be a single, valid JSON object. Do not include any explanatory text, apologies, or any other content outside of the JSON structure.
+    
+    You are an expert in job vacancy analysis. Your task is to identify 'Undesired Flexibility' and 'Desirable Flexibility' within a given job description.
+    
+    **Definitions:**
+    
+    1.  **Undesired Flexibility:** This occurs when a job vacancy mentions flexibility, but this flexibility primarily benefits the company, not the worker. The worker has little to no choice or control over these flexible arrangements.
+        * **Examples of Undesired Flexibility:**
+            * Requiring irregular hours or unpredictable schedules dictated by the company.
+            * Mandatory weekend or holiday work as a regular part of the job without extra compensation or employee choice.
+            * Rotating shifts controlled by the company, not the employee.
+            * "Flexible hours" meaning the employee must be available whenever the company needs them.
+            * Employer may change job duties at the last-minute without providing any formal notice.
+    
+    2.  **Desirable Flexibility:** This refers to genuine flexibility where the employee has significant input, choice, or control over their working arrangements, allowing for better work-life balance.
+        * **Examples of Desirable Flexibility:**
+            * Employee can choose their start and end times within a given range (flextime).
+            * Option for remote work (fully remote or hybrid) where the employee has some say in the arrangement.
+            * Compressed workweeks (e.g., working 4 longer days for a 3-day weekend) if offered as an employee option.
+            * Ability to adjust schedules for personal appointments with an agreed-upon way to make up work.
+            * Employer offers or agrees to provide an advance notice of employees' work schedules and shifts.
+            * Control over break times.
+            * Job sharing options.
+    
+    **Task:**
+    
+    Analyze the following job proposal text:
+    {description}
+    
+    Based on your analysis, provide a response in a single JSON object using the EXACT structure below.
+    
+    **JSON Output Structure:**
+    
+    ```json
+    {{
+      "undesired_flexibility": "YES" or "NO",
+      "undesired_reason": "A concise explanation of why it is or is not Undesired Flexibility. Quote or refer to specific parts of the job description that led to your conclusion. If 'NO', briefly state why it doesn't meet the criteria.",
+      "undesired_difficulty_classification": "If you encountered ambiguity or difficulty in classifying Undesired Flexibility (e.g., vague wording, conflicting information), explain your reasoning here. If the classification was straightforward, leave this field blank.",
+      "desired_flexibility": "YES" or "NO",
+      "desired_reason": "A concise explanation of why it is or is not Desirable Flexibility. Quote or refer to specific parts of the job description that led to your conclusion. If 'NO', briefly state why it doesn't meet the criteria.",
+      "desired_difficulty_classification": "If you encountered ambiguity or difficulty in classifying Desirable Flexibility (e.g., vague wording, conflicting information), explain your reasoning here. If the classification was straightforward, leave this field blank."
+    }}
+    ```
+    """
 
     data = {
         "prompt": prompt,
-        "model": "phi",
+        "model": "gemma3",
         "format": "json",
         "stream": False,
         "options": {
-            "temperature": 0.0,
-            "num_predict": 100,
+            "temperature": 0.2,
+            "num_predict": 200,
         },
     }
 
     try:
         with httpx.Client() as client:
             start_time = time.time()
-            logging.info(f"Sendind requisition to Ollama...")
+            logging.info("Sendind requisition to Ollama...")
             response = client.post(
                 ollama_url,
                 json=data,
@@ -57,10 +89,14 @@ def evaluate_hour_flexibility_local(description, ollama_url="http://localhost:11
             text_response = response_json["response"]
 
             response_json_final = json.loads(text_response)
-            unwanted_flexibility = response_json_final.get("undesired_flexibility", "Não")
-            justification = response_json_final.get("reason", "No justification")
+            undesired_flexibility = response_json_final.get("undesired_flexibility", "No")
+            undesired_reason = response_json_final.get("undesired_reason", "No justification")
+            undesired_difficulty_classification = response_json_final.get("undesired_difficulty_classification", "")
+            desired_flexibility = response_json_final.get("desired_flexibility", "No")
+            desired_reason = response_json_final.get("desired_reason", "No justification")
+            desired_difficulty_classification = response_json_final.get("desired_difficulty_classification", "")
             logging.info("Response received from Ollama successfully.")
-            return unwanted_flexibility, justification
+            return undesired_flexibility, undesired_reason, undesired_difficulty_classification, desired_flexibility, desired_reason, desired_difficulty_classification
 
     except httpx.RequestError as e:
         logging.error(f"Ollama request error: {e}")
@@ -125,7 +161,7 @@ def calculate_dispersion(row, num_loops):
     return "Yes" if len(set(results)) > 1 else "No"
 
 
-def main(num_loops=1, batch_size=1):
+def main():
     """Main function."""
     # Reading input files
     df = read_input_files()
@@ -135,20 +171,24 @@ def main(num_loops=1, batch_size=1):
 
     body_column = next((col for col in df.columns if col.lower() == "body"), None)
 
-    for i in range(1, num_loops + 1):
-        logging.info(f"Starting loop {i}...")
-        df[f"undesired_flexibility_{i}"] = ""
-        df[f"reason_{i}"] = ""
+    logging.info(f"Starting avaluation")
+    df[f"undesired_flexibility"] = ""
+    df[f"undesired_reason"] = ""
+    df[f"undesired_difficulty_classification"] = ""
+    df[f"desired_flexibility"] = ""
+    df[f"desired_reason"] = ""
+    df[f"desired_difficulty_classification"] = ""
 
-        for index, row in tqdm(df.iterrows(), total=len(df), desc=f"Loop {i}"):
-            description = row[body_column]
-            unwanted_flexibility, justification = evaluate_hour_flexibility_local(description)
-            df.loc[index, f"undesired_flexibility_{i}"] = unwanted_flexibility
-            df.loc[index, f"reason_{i}"] = justification
+    for index, row in tqdm(df.iterrows(), total=len(df)):
+        description = row[body_column]
+        undesired_flexibility, undesired_reason, undesired_difficulty_classification, desired_flexibility, desired_reason, desired_difficulty_classification = evaluate_hour_flexibility_local(description)
+        df.loc[index, f"undesired_flexibility"] = undesired_flexibility
+        df.loc[index, f"undesired_reason"] = undesired_reason
+        df.loc[index, f"undesired_difficulty_classification"] = undesired_difficulty_classification
+        df.loc[index, f"desired_flexibility"] = desired_flexibility
+        df.loc[index, f"desired_reason"] = desired_reason
+        df.loc[index, f"desired_difficulty_classification"] = desired_difficulty_classification
 
-    # Calculate dispertion
-    logging.info("Calculating dispersion...")
-    df["dispersion"] = df.apply(calculate_dispersion, axis=1, num_loops=num_loops)
 
     # Saving files
     output_filepath = os.path.join("../output", "Test_Local.xlsx")
