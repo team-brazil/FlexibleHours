@@ -114,20 +114,17 @@ def calculate_dispersion(row, num_loops):
         return "No"  
 
 
-def main(num_loops=10, batch_size=1, num_processes=2):
+def main(num_loops=1, batch_size=1, num_processes=2):
     load_dotenv()
-
-    with open("config.json", "r") as f:
-        config = json.load(f)
 
     api_keys = os.getenv("API_KEYS")
     if api_keys:
         api_keys = api_keys.split(',')
     else:
-        api_keys = config.get("api_keys", [])
+        api_keys = os.getenv("api_keys", [])
 
     if not api_keys:
-        raise ValueError("API_KEYS not found. Check .env or config.json file")
+        raise ValueError("API_KEYS not found. Check .env file")
 
     if num_processes > len(api_keys):
         logging.warning(
