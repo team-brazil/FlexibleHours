@@ -5,6 +5,7 @@ import time
 import os
 import json
 from tqdm import tqdm
+from openpyxl.styles import PatternFill
 
 logging.basicConfig(
     level=logging.INFO, format="%(asctime)s - %(levelname)s - %(message)s"
@@ -13,42 +14,55 @@ logging.basicConfig(
 
 def evaluate_hour_flexibility_local(description, ollama_url="http://localhost:11434/api/generate"):
     """
-    Analisa a descrição de uma vaga de emprego para classificar a flexibilidade de horário,
-    com lógica de retentativa e tratamento de erro aprimorado.
+    Analisa a descrição de uma vaga para classificar a flexibilidade de horário,
+    agora com uma camada de validação em Python para garantir a citação em respostas 'YES'.
     """
     prompt = f"""
-    You are a deterministic JSON-generating bot executing a strict classification task. Your output MUST be a single, valid JSON object. Follow the rules with no deviation.
-
-    **Primary Rule: High-Confidence Classification**
-    You will classify flexibility as 'YES' ONLY IF you find explicit, unambiguous evidence in the text. If there is any doubt, ambiguity, or the text only hints at flexibility, you MUST classify it as 'NO'. Your goal is 100% precision. It is better to miss a potential case (false negative) than to incorrectly classify a case (false positive).
-
-    **Definitions & Keywords for Classification:**
-
-    1.  **Undesired Flexibility (YES only if text contains):**
-        * Mandatory/required work on weekends or holidays ("disponibilidade para trabalhar aos fins de semana", "trabalho em feriados").
-        * Explicitly mentioned rotating shifts or unpredictable schedules ("horários rotativos", "escala 6x1", "disponibilidade de horário").
-        * Company-dictated schedule changes ("horário pode sofrer alterações").
+    You are an expert HR analyst bot specializing in classifying workplace flexibility from job descriptions. Your goal is to produce perfectly clean, auditable, and accurate JSON data by following a strict set of rules.
     
-    2.  **Desirable Flexibility (YES only if text contains):**
-        * Explicit mention of remote work, home office, or hybrid model ("trabalho remoto", "híbrido", "home office").
-        * Explicit mention of flexible hours or flextime ("horário flexível", "banco de horas").
-        * Employee has clear control over their schedule ("você monta seu horário").
-
-    **Task:**
-    Analyze the job description below. Adhere strictly to the **Primary Rule**. For 'reason' fields, quote the EXACT phrase that justifies your 'YES' decision.
-
+    **1. Core Concepts & Definitions**
+    
+    * **Undesirable Flexibility:** This is company-centric flexibility. It means the employee's schedule is unpredictable or subject to the employer's needs, giving the employee LOW autonomy.
+        * *Examples:* Mandatory weekend work, rotating shifts, schedule changed by the manager.
+    * **Desirable Flexibility:** This is employee-centric flexibility. It means the employee has significant control and autonomy over WHEN or WHERE they work.
+        * *Examples:* Remote work, setting your own hours, flexible schedules.
+    * **Neutral:** A job is neutral if it has a standard, fixed schedule (e.g., "Monday to Friday, 9am to 6pm") with no explicit mention of either undesirable or desirable flexibility types. In this case, both classifications will be 'NO'.
+    
+    **2. Critical Rules of Analysis (NON-NEGOTIABLE)**
+    
+    * **Rule #1 - The Quote Mandate:** If a classification is 'YES', you MUST provide a direct, exact quote from the text in the 'reason' field. A 'YES' without a quote is an invalid analysis.
+    * **Rule #2 - The 'N/A' for 'NO' Mandate:** If a classification is 'NO', you MUST return the string 'N/A' in the 'reason' field. This helps confirm you analyzed the category.
+    * **Rule #3 - The Mutual Exclusivity Mandate:** A job CANNOT be both 'undesirable' and 'desirable' at the same time. If you find evidence for both, you must decide which evidence is STRONGER and MORE EXPLICIT. Classify the stronger one as 'YES' and the other MUST BE 'NO'.
+    
+    **3. Keyword Evidence Guide**
+    Use these keywords to find evidence.
+    
+    * **Evidence for 'Undesired Flexibility':**
+        * **Mandatory Non-Standard Hours:** "work on weekends", "work on holidays", "on-call weekends", "weekend shifts", "holiday rotation", "on-call duty", "mandatory overtime".
+        * **Fixed & Inflexible Shift Work:** "rotating shifts", "shift work", "fixed shifts", "day and night shifts", "evening shifts required", and specific schedules like "6x1 schedule", "12x36 schedule", "5x2 with rotating days off".
+        * **Unpredictable & Company-Controlled Schedule:** "schedule subject to change", "schedule may vary based on business needs", "full schedule availability required", "must be flexible to work various shifts".
+    * **Evidence for 'Desirable Flexibility':**
+        * **Location Flexibility:** "remote work", "fully remote", "100% remote", "remote-first", "hybrid model", "home office", "work from anywhere", "telecommuting".
+        * **Time Flexibility:** "flexible hours", "flextime", "flexible schedule", "time bank", "core hours policy".
+        * **Schedule Autonomy:** "set your own schedule", "manage your own hours", "you build your timetable", "asynchronous work", "self-managed schedule".
+    
+    **4. Your Step-by-Step Task**
+    
+    1.  **Analyze the Job Description** provided below.
+    2.  **Evaluate Evidence** for both 'undesirable' and 'desirable' categories based on the keywords.
+    3.  **Apply the Rules,** especially the Mutual Exclusivity rule if needed.
+    4.  **Construct the final JSON** output precisely according to the structure.
+    
     **Job Description:**
     {description}
-
-    **JSON Output Structure (Strict Adherence Required):**
+    
+    **Required JSON Output Structure:**
     ```json
     {{
-      "undesired_flexibility": "YES" or "NO",
-      "undesired_reason": "If 'YES', quote the exact evidence. If 'NO', state 'No explicit evidence of company-controlled flexibility.'",
-      "undesired_difficulty_classification": "If classification was ambiguous, explain why and quote the exact evidence. Otherwise, leave blank",
-      "desired_flexibility": "YES" or "NO",
-      "desired_reason": "If 'YES', quote the exact evidence. If 'NO', state 'No explicit evidence of employee-controlled flexibility.'",
-      "desired_difficulty_classification": "If classification was ambiguous, explain and quote the exact evidence. Otherwise, leave blank"
+      "undesired_flexibility": "YES or NO",
+      "undesired_reason": "Exact quote from text if 'YES', or 'N/A' if 'NO'.",
+      "desired_flexibility": "YES or NO",
+      "desired_reason": "Exact quote from text if 'YES', or 'N/A' if 'NO'."
     }}
     ```
     """
@@ -85,40 +99,56 @@ def evaluate_hour_flexibility_local(description, ollama_url="http://localhost:11
                 text_response = response.json()["response"]
                 response_json_final = json.loads(text_response)
 
-                undesired_flexibility = response_json_final.get("undesired_flexibility", "Not Found")
-                undesired_reason = response_json_final.get("undesired_reason", "without justification")
-                undesired_difficulty_classification = response_json_final.get("undesired_difficulty_classification", "")
-                desired_flexibility = response_json_final.get("desired_flexibility", "Not Found")
-                desired_reason = response_json_final.get("desired_reason", "without justification")
-                desired_difficulty_classification = response_json_final.get("desired_difficulty_classification", "")
+                # --- VALORES BRUTOS VINDOS DO MODELO ---
+                undesired_flex_model = 1 if response_json_final.get("undesired_flexibility") == "YES" else 0
+                undesired_reason_model = response_json_final.get("undesired_reason", "")
+                desired_flex_model = 1 if response_json_final.get("desired_flexibility") == "YES" else 0
+                desired_reason_model = response_json_final.get("desired_reason", "")
 
-                logging.info("Resposta do Ollama recebida com sucesso.")
-                return undesired_flexibility, undesired_reason, undesired_difficulty_classification, desired_flexibility, desired_reason, desired_difficulty_classification
+                # *** NOVA LÓGICA DE VALIDAÇÃO (TRAVA DE SEGURANÇA) ***
+                # Para Undesired
+                if undesired_flex_model == 1 and (undesired_reason_model.strip() == "" or undesired_reason_model.strip() == "N/A"):
+                    logging.warning(f"Inconsistência encontrada para 'Undesired': Modelo retornou YES sem citação. Anulando para NO.")
+                    undesired_flex_final = 0
+                    undesired_reason_final = "" # Garante que a razão fique vazia
+                else:
+                    undesired_flex_final = undesired_flex_model
+                    undesired_reason_final = undesired_reason_model
 
-        # ---- TRATAMENTO DE ERRO APRIMORADO ----
+                # Para Desired
+                if desired_flex_model == 1 and (desired_reason_model.strip() == "" or desired_reason_model.strip() == "N/A"):
+                    logging.warning(f"Inconsistência encontrada para 'Desired': Modelo retornou YES sem citação. Anulando para NO.")
+                    desired_flex_final = 0
+                    desired_reason_final = "" # Garante que a razão fique vazia
+                else:
+                    desired_flex_final = desired_flex_model
+                    desired_reason_final = desired_reason_model
+
+                logging.info("Resposta do Ollama recebida e validada com sucesso.")
+                return undesired_flex_final, undesired_reason_final, desired_flex_final, desired_reason_final
+
         except (httpx.RequestError, httpx.HTTPStatusError) as e:
             logging.error(f"Tentativa {attempt + 1} falhou com erro de rede/HTTP: {e}")
             if attempt + 1 == max_retries:
-                return "Not Found", f"Falha de conexão com o modelo: {e}", "", "Not Found", f"Falha de conexão com o modelo: {e}", ""
+                return 0, f"Falha de conexão com o modelo: {e}", 0, f"Falha de conexão com o modelo: {e}"
         except json.JSONDecodeError as e:
             logging.error(f"Tentativa {attempt + 1} falhou com JSON inválido: {e}. Resposta problemática: {response.text[:200]}...")
             if attempt + 1 == max_retries:
-                return "Not Found", "Modelo retornou JSON inválido", "", "Not Found", "Modelo retornou JSON inválido", ""
+                return 0, "Modelo retornou JSON inválido", 0, "Modelo retornou JSON inválido"
         except Exception as e:
             logging.error(f"Tentativa {attempt + 1} falhou com erro inesperado: {e}")
             if attempt + 1 == max_retries:
-                return "Not Found", f"Erro inesperado no processamento: {e}", "", "Not Found", f"Erro inesperado no processamento: {e}", ""
+                return 0, f"Erro inesperado no processamento: {e}", 0, f"Erro inesperado no processamento: {e}"
 
-        # Espera um pouco antes de tentar novamente
         time.sleep(5)
 
-    # Se todas as tentativas falharem, retorna o valor padrão de falha
-    return "Not Found", "Todas as tentativas de processamento falharam", "", "Not Found", "Todas as tentativas de processamento falharam", ""
+    return 0, "Todas as tentativas de processamento falharam", 0, "Todas as tentativas de processamento falharam"
 
 
 def read_input_files(diretorio="../input"):
     """
-    Lê arquivos .csv e .xlsx do diretório de entrada e os concatena em um único DataFrame.
+    Lê arquivos .csv e .xlsx do diretório de entrada, mantendo e renomeando
+    as colunas de interesse para 'Title' e 'Body'.
     """
     df_list = []
     readed_files = False
@@ -137,14 +167,16 @@ def read_input_files(diretorio="../input"):
                 logging.warning(f"Arquivo {filename} não é .csv ou .xlsx. Ignorando.")
                 continue
 
-            body_column = next(
-                (col for col in temp_df.columns if col.lower() == "body"), None
-            )
-            if body_column is None:
-                logging.warning(f"Arquivo {filename} não possui a coluna 'BODY'. Ignorando.")
+            # Mantido como na versão anterior para ler o arquivo de entrada corretamente
+            body_column = next((col for col in temp_df.columns if col.lower() == "body"), None)
+            title_column = next((col for col in temp_df.columns if col.lower() == "title"), None)
+
+            if body_column is None or title_column is None:
+                logging.warning(f"Arquivo {filename} não possui as colunas 'Body' e/ou 'Title'. Ignorando.")
                 continue
 
-            temp_df.rename(columns={body_column: 'body'}, inplace=True)
+            temp_df = temp_df[[title_column, body_column]]
+            temp_df.rename(columns={title_column: 'Title', body_column: 'Body'}, inplace=True)
             df_list.append(temp_df)
             readed_files = True
 
@@ -160,6 +192,44 @@ def read_input_files(diretorio="../input"):
     return pd.concat(df_list, ignore_index=True) if df_list else None
 
 
+def save_with_coloring(df, filepath):
+    """Salva o DataFrame em um arquivo Excel, colorindo as linhas."""
+    try:
+        with pd.ExcelWriter(filepath, engine='openpyxl') as writer:
+            df.to_excel(writer, index=False, sheet_name='Processed_Jobs')
+
+            workbook = writer.book
+            worksheet = writer.sheets['Processed_Jobs']
+
+            red_fill = PatternFill(start_color='FFC7CE', end_color='FFC7CE', fill_type='solid')
+            green_fill = PatternFill(start_color='C6EFCE', end_color='C6EFCE', fill_type='solid')
+
+            try:
+                undesired_col_idx = df.columns.get_loc("Undesired_flexibility_dummy") + 1
+                desired_col_idx = df.columns.get_loc("Desired_flexibility_dummy") + 1
+            except KeyError as e:
+                logging.error(f"Coluna não encontrada no DataFrame final: {e}. Não será possível colorir.")
+                return
+
+            for row_idx in range(2, worksheet.max_row + 1):
+                undesired_cell_value = worksheet.cell(row=row_idx, column=undesired_col_idx).value
+                desired_cell_value = worksheet.cell(row=row_idx, column=desired_col_idx).value
+
+                fill_to_apply = None
+                if undesired_cell_value == 1:
+                    fill_to_apply = red_fill
+                elif desired_cell_value == 1:
+                    fill_to_apply = green_fill
+
+                if fill_to_apply:
+                    for cell in worksheet[row_idx]:
+                        cell.fill = fill_to_apply
+
+        logging.info(f"Arquivo salvo com sucesso e com cores em: {filepath}")
+
+    except Exception as e:
+        logging.error(f"Erro ao salvar o arquivo Excel com formatação: {e}")
+
 def main():
     """Função principal para ler, processar e salvar os dados."""
     df = read_input_files()
@@ -167,33 +237,39 @@ def main():
         logging.error("Nenhum arquivo de entrada válido encontrado. Encerrando.")
         return
 
-    # Adiciona as colunas para os resultados da análise
     new_columns = [
-        "undesired_flexibility", "undesired_reason", "undesired_difficulty_classification",
-        "desired_flexibility", "desired_reason", "desired_difficulty_classification"
+        "Undesired_flexibility_dummy", "quote_body_undesired",
+        "Desired_flexibility_dummy", "quote_body_desired"
     ]
     for col in new_columns:
         df[col] = ""
 
-    # Itera sobre o DataFrame e processa cada descrição
     for index, row in tqdm(df.iterrows(), total=len(df), desc="Analisando vagas"):
-        description = row["body"]
+        description = row["Body"]
         if pd.isna(description) or not isinstance(description, str) or description.strip() == "":
             logging.warning(f"Descrição vazia ou inválida na linha {index}. Pulando.")
-            results = ("Inválido", "Descrição vazia", "", "Inválido", "Descrição vazia", "")
+            results = (0, "Descrição vazia", 0, "Descrição vazia")
         else:
             results = evaluate_hour_flexibility_local(description)
 
-        # Atribui os resultados às colunas correspondentes
         df.loc[index, new_columns] = results
 
-    # Salva o resultado em um novo arquivo Excel
-    output_filepath = os.path.join("../output/results", "Test_Local_Processed.xlsx")
-    try:
-        df.to_excel(output_filepath, index=False, engine="openpyxl")
-        logging.info(f"Arquivo salvo com sucesso em: {output_filepath}")
-    except Exception as e:
-        logging.error(f"Erro ao salvar o arquivo Excel: {e}")
+        # Limpa o 'N/A' que pode vir do modelo para deixar a célula vazia no Excel
+        if df.loc[index, "quote_body_undesired"] == "N/A":
+            df.loc[index, "quote_body_undesired"] = ""
+        if df.loc[index, "quote_body_desired"] == "N/A":
+            df.loc[index, "quote_body_desired"] = ""
+
+
+    final_columns_order = [
+        "Title", "Body",
+        "Undesired_flexibility_dummy", "quote_body_undesired",
+        "Desired_flexibility_dummy", "quote_body_desired"
+    ]
+    df_final = df[final_columns_order]
+
+    output_filepath = os.path.join("../output/results", "Test_Local_Processed_V4.xlsx")
+    save_with_coloring(df_final, output_filepath)
 
     logging.info("Processamento concluído.")
 
