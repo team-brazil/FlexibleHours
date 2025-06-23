@@ -14,8 +14,8 @@ logging.basicConfig(
 
 def evaluate_hour_flexibility_local(description, ollama_url="http://localhost:11434/api/generate"):
     """
-    Analisa a descrição de uma vaga para classificar a flexibilidade de horário,
-    agora com uma camada de validação em Python para garantir a citação em respostas 'YES'.
+    Analyzes a job description to classify its schedule flexibility,
+    now with a Python validation layer to ensure a quote is provided for 'YES' answers.
     """
     prompt = f"""
     You are an expert HR analyst bot specializing in classifying workplace flexibility from job descriptions. Your goal is to produce perfectly clean, auditable, and accurate JSON data by following a strict set of rules.
@@ -83,7 +83,7 @@ def evaluate_hour_flexibility_local(description, ollama_url="http://localhost:11
         try:
             with httpx.Client() as client:
                 start_time = time.time()
-                logging.info(f"Enviando requisição para o Ollama (Tentativa {attempt + 1}/{max_retries})...")
+                logging.info(f"Sending request to Ollama (Attempt {attempt + 1}/{max_retries})...")
                 response = client.post(
                     ollama_url,
                     json=data,
@@ -92,92 +92,92 @@ def evaluate_hour_flexibility_local(description, ollama_url="http://localhost:11
 
                 end_time = time.time()
                 elapsed_time = end_time - start_time
-                print(f"Tempo de geração: {elapsed_time:.3f} segundos")
+                print(f"Generation time: {elapsed_time:.3f} seconds")
 
                 response.raise_for_status()
 
                 text_response = response.json()["response"]
-                response_json_final = json.loads(text_response)
+                final_response_json = json.loads(text_response)
 
-                # --- VALORES BRUTOS VINDOS DO MODELO ---
-                undesired_flex_model = 1 if response_json_final.get("undesired_flexibility") == "YES" else 0
-                undesired_reason_model = response_json_final.get("undesired_reason", "")
-                desired_flex_model = 1 if response_json_final.get("desired_flexibility") == "YES" else 0
-                desired_reason_model = response_json_final.get("desired_reason", "")
+                # --- RAW VALUES FROM THE MODEL ---
+                model_undesired_flex = 1 if final_response_json.get("undesired_flexibility") == "YES" else 0
+                model_undesired_reason = final_response_json.get("undesired_reason", "")
+                model_desired_flex = 1 if final_response_json.get("desired_flexibility") == "YES" else 0
+                model_desired_reason = final_response_json.get("desired_reason", "")
 
-                # *** NOVA LÓGICA DE VALIDAÇÃO (TRAVA DE SEGURANÇA) ***
-                # Para Undesired
-                if undesired_flex_model == 1 and (undesired_reason_model.strip() == "" or undesired_reason_model.strip() == "N/A"):
-                    logging.warning(f"Inconsistência encontrada para 'Undesired': Modelo retornou YES sem citação. Anulando para NO.")
-                    undesired_flex_final = 0
-                    undesired_reason_final = ""
+                # *** NEW VALIDATION LOGIC (SAFETY CHECK) ***
+                # For Undesired
+                if model_undesired_flex == 1 and (model_undesired_reason.strip() == "" or model_undesired_reason.strip() == "N/A"):
+                    logging.warning(f"Inconsistency found for 'Undesired': Model returned YES without a quote. Overriding to NO.")
+                    final_undesired_flex = 0
+                    final_undesired_reason = ""
                 else:
-                    undesired_flex_final = undesired_flex_model
-                    undesired_reason_final = undesired_reason_model
+                    final_undesired_flex = model_undesired_flex
+                    final_undesired_reason = model_undesired_reason
 
-                # Para Desired
-                if desired_flex_model == 1 and (desired_reason_model.strip() == "" or desired_reason_model.strip() == "N/A"):
-                    logging.warning(f"Inconsistência encontrada para 'Desired': Modelo retornou YES sem citação. Anulando para NO.")
-                    desired_flex_final = 0
-                    desired_reason_final = ""
+                # For Desired
+                if model_desired_flex == 1 and (model_desired_reason.strip() == "" or model_desired_reason.strip() == "N/A"):
+                    logging.warning(f"Inconsistency found for 'Desired': Model returned YES without a quote. Overriding to NO.")
+                    final_desired_flex = 0
+                    final_desired_reason = ""
                 else:
-                    desired_flex_final = desired_flex_model
-                    desired_reason_final = desired_reason_model
+                    final_desired_flex = model_desired_flex
+                    final_desired_reason = model_desired_reason
 
-                logging.info("Resposta do Ollama recebida e validada com sucesso.")
-                return undesired_flex_final, undesired_reason_final, desired_flex_final, desired_reason_final
+                logging.info("Ollama response received and successfully validated.")
+                return final_undesired_flex, final_undesired_reason, final_desired_flex, final_desired_reason
 
         except Exception as e:
-            logging.error(f"Tentativa {attempt + 1} falhou com erro inesperado: {e}")
+            logging.error(f"Attempt {attempt + 1} failed with an unexpected error: {e}")
             if attempt + 1 == max_retries:
                 return 0, "", 0, ""
 
         time.sleep(5)
 
-    return 0, "Todas as tentativas de processamento falharam", 0, "Todas as tentativas de processamento falharam"
+    return 0, "All processing attempts failed", 0, "All processing attempts failed"
 
 
-def read_input_files(diretorio="../input"):
+def read_input_files(directory="../input"):
     """
-    Lê arquivos .csv e .xlsx do diretório de entrada, mantendo e renomeando
-    as colunas de interesse para 'Title' e 'Body'.
+    Reads .csv and .xlsx files from the input directory, keeping and renaming
+    the columns of interest to 'Title' and 'Body'.
     """
     df_list = []
-    readed_files = False
+    files_were_read = False
 
-    for filename in os.listdir(diretorio):
+    for filename in os.listdir(directory):
         if filename.startswith("~$") or filename == ".DS_Store":
             continue
 
-        filepath = os.path.join(diretorio, filename)
+        filepath = os.path.join(directory, filename)
         try:
             if filename.endswith(".csv"):
                 temp_df = pd.read_csv(filepath, encoding="utf-8")
             elif filename.endswith(".xlsx"):
                 temp_df = pd.read_excel(filepath, engine="openpyxl")
             else:
-                logging.warning(f"Arquivo {filename} não é .csv ou .xlsx. Ignorando.")
+                logging.warning(f"File {filename} is not .csv or .xlsx. Ignoring.")
                 continue
 
-            # Mantido como na versão anterior para ler o arquivo de entrada corretamente
+            # Kept as in the previous version to read the input file correctly
             body_column = next((col for col in temp_df.columns if col.lower() == "body"), None)
             title_column = next((col for col in temp_df.columns if col.lower() == "title"), None)
 
             if body_column is None or title_column is None:
-                logging.warning(f"Arquivo {filename} não possui as colunas 'Body' e/ou 'Title'. Ignorando.")
+                logging.warning(f"File {filename} does not have 'Body' and/or 'Title' columns. Ignoring.")
                 continue
 
             temp_df = temp_df[[title_column, body_column]]
             temp_df.rename(columns={title_column: 'Title', body_column: 'Body'}, inplace=True)
             df_list.append(temp_df)
-            readed_files = True
+            files_were_read = True
 
         except Exception as e:
-            logging.error(f"Erro ao ler o arquivo {filename}: {e}")
+            logging.error(f"Error reading file {filename}: {e}")
 
-    if not readed_files:
+    if not files_were_read:
         logging.warning(
-            "Nenhum arquivo válido encontrado ou processado. Verifique os arquivos na pasta 'input'."
+            "No valid files found or processed. Check the files in the 'input' folder."
         )
         return None
 
@@ -185,7 +185,7 @@ def read_input_files(diretorio="../input"):
 
 
 def save_with_coloring(df, filepath):
-    """Salva o DataFrame em um arquivo Excel, colorindo as linhas."""
+    """Saves the DataFrame to an Excel file, coloring the rows."""
     try:
         with pd.ExcelWriter(filepath, engine='openpyxl') as writer:
             df.to_excel(writer, index=False, sheet_name='Processed_Jobs')
@@ -200,7 +200,7 @@ def save_with_coloring(df, filepath):
                 undesired_col_idx = df.columns.get_loc("Undesired_flexibility_dummy") + 1
                 desired_col_idx = df.columns.get_loc("Desired_flexibility_dummy") + 1
             except KeyError as e:
-                logging.error(f"Coluna não encontrada no DataFrame final: {e}. Não será possível colorir.")
+                logging.error(f"Column not found in the final DataFrame: {e}. Coloring will not be possible.")
                 return
 
             for row_idx in range(2, worksheet.max_row + 1):
@@ -217,17 +217,17 @@ def save_with_coloring(df, filepath):
                     for cell in worksheet[row_idx]:
                         cell.fill = fill_to_apply
 
-        logging.info(f"Arquivo salvo com sucesso e com cores em: {filepath}")
+        logging.info(f"File saved successfully with colors at: {filepath}")
 
     except Exception as e:
-        logging.error(f"Erro ao salvar o arquivo Excel com formatação: {e}")
+        logging.error(f"Error saving the Excel file with formatting: {e}")
 
 
 def main():
-    """Função principal para ler, processar e salvar os dados."""
+    """Main function to read, process, and save the data."""
     df = read_input_files()
     if df is None:
-        logging.error("Nenhum arquivo de entrada válido encontrado. Encerrando.")
+        logging.error("No valid input files found. Exiting.")
         return
 
     new_columns = [
@@ -237,34 +237,33 @@ def main():
     for col in new_columns:
         df[col] = ""
 
-    for index, row in tqdm(df.iterrows(), total=len(df), desc="Analisando vagas"):
+    for index, row in tqdm(df.iterrows(), total=len(df), desc="Analyzing jobs"):
         description = row["Body"]
         if pd.isna(description) or not isinstance(description, str) or description.strip() == "":
-            logging.warning(f"Descrição vazia ou inválida na linha {index}. Pulando.")
-            results = (0, "Descrição vazia", 0, "Descrição vazia")
+            logging.warning(f"Empty or invalid description on row {index}. Skipping.")
+            results = (0, "Empty description", 0, "Empty description")
         else:
             results = evaluate_hour_flexibility_local(description)
 
         df.loc[index, new_columns] = results
 
-        # Limpa o 'N/A' que pode vir do modelo para deixar a célula vazia no Excel
+        # Clears the 'N/A' that may come from the model to leave the Excel cell empty
         if df.loc[index, "quote_body_undesired"] == "N/A":
             df.loc[index, "quote_body_undesired"] = ""
         if df.loc[index, "quote_body_desired"] == "N/A":
             df.loc[index, "quote_body_desired"] = ""
-
 
     final_columns_order = [
         "Title", "Body",
         "Undesired_flexibility_dummy", "quote_body_undesired",
         "Desired_flexibility_dummy", "quote_body_desired"
     ]
-    df_final = df[final_columns_order]
+    final_df = df[final_columns_order]
 
     output_filepath = os.path.join("../output/results", "Job_postings_processed.xlsx")
-    save_with_coloring(df_final, output_filepath)
+    save_with_coloring(final_df, output_filepath)
 
-    logging.info("Processamento concluído.")
+    logging.info("Processing completed.")
 
 
 if __name__ == "__main__":
