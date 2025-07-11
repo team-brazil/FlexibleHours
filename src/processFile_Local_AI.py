@@ -1,154 +1,196 @@
-import httpx
-import logging
-import pandas as pd
-import time
 import os
+import time
 import json
+import logging
+import httpx
+import pandas as pd
 from tqdm import tqdm
 from openpyxl.styles import PatternFill
+
+# === CONFIG ===
+INPUT_DIR = "../input"
+OLLAMA_URL = "http://localhost:11434/api/generate"
+MODEL_NAME = "llama3.2"
+OUTPUT_PATH = "../output/results/Job_postings_processed_" + MODEL_NAME + ".xlsx"
+NUM_PREDICT = 200
+MAX_RETRIES = 3
+RETRY_SLEEP = 5
 
 logging.basicConfig(
     level=logging.INFO, format="%(asctime)s - %(levelname)s - %(message)s"
 )
 
 
-def evaluate_hour_flexibility_local(description, ollama_url="http://localhost:11434/api/generate"):
+# ----------- NEW CONDENSE_DESCRIPTION ------------
+def condense_description(description, window=3, min_length=2000):
     """
-    Analyzes a job description to classify its schedule flexibility,
-    now with a Python validation layer to ensure a quote is provided for 'YES' answers.
+    Só aplica o filtro se o texto for realmente longo.
+    Mantém frases com palavras-chave e contexto em volta.
     """
-    prompt = f"""
-    You are an expert HR analyst bot specializing in classifying workplace flexibility from job descriptions. Your goal is to produce perfectly clean, auditable, and accurate JSON data by following a strict set of rules.
+    if len(description) < min_length:
+        return description
+
+    keywords = [
+        "schedule", "flexible", "flexibility", "shift", "weekend", "weekends",
+        "holiday", "holidays", "night", "nights", "irregular", "on-call",
+        "availability", "as needed", "rotating", "rotational", "hours", "hourly",
+        "mandatory", "split shift", "split-shift", "variable", "overtime", "call-in",
+        "unpredictable", "as required", "required to", "vary", "subject to", "full availability"
+    ]
+    lines = description.split('\n')
+    lines = [l for l in lines if l.strip() != ""]
+    keyword_matches = set()
+    for i, line in enumerate(lines):
+        if any(kw in line.lower() for kw in keywords):
+            for j in range(max(0, i - window), min(len(lines), i + window + 1)):
+                keyword_matches.add(j)
+    if not keyword_matches:
+        return description
+    return "\n".join(lines[i] for i in sorted(keyword_matches))
+
+
+# ----------- PROMPT ------------
+def build_flexibility_prompt(description):
+    return f"""
+    You are an expert HR analyst. Classify the work hours flexibility in the job description.
+
+    Definitions:
+    - "Undesirable Flexibility": The company/employer controls or can change the work schedule to fit business needs (e.g. "may need to work as required", "rotating shifts", "schedule subject to change by manager").
+    - "Desirable Flexibility": The employee chooses when to work ("set your own schedule", "work any hours you want").
+    - "Neutral": Standard, fixed schedule or not mentioned.
     
-    **1. Core Concepts & Definitions**
+    Instructions:
+    - Mark "undesired_flexibility" as "YES" whenever there is a clear indication that the employer may set, change, or demand variable/unpredictable hours.
+    - Mark "desirable_flexibility" as "YES" if the employee decides their work hours.
+    - If both, prioritize "desirable flexibility".
+    - If neither, answer "NO" for both.
+    - Only consider *hours/schedule* flexibility.
+    - Copy the exact phrase for "YES" cases as quote; otherwise "N/A".
     
-    * **Undesirable Flexibility:** This is company-centric flexibility. It means the employee's schedule is unpredictable or subject to the employer's needs, giving the employee LOW autonomy.
-        * *Examples:* Mandatory weekend work, rotating shifts, schedule changed by the manager.
-    * **Desirable Flexibility:** This is employee-centric flexibility. It means the employee has significant control and autonomy over WHEN or WHERE they work.
-        * *Examples:* Remote work, setting your own hours, flexible schedules.
-    * **Neutral:** A job is neutral if it has a standard, fixed schedule (e.g., "Monday to Friday, 9am to 6pm") with no explicit mention of either undesirable or desirable flexibility types. In this case, both classifications will be 'NO'.
+    Positive (Undesired) Examples:
+    - "May be required to work weekends or holidays."
+    - "Rotating schedule required."
+    - "Availability to work a flexible schedule to meet company needs."
+    - "Must be able to work overtime as needed."
     
-    **2. Critical Rules of Analysis (NON-NEGOTIABLE)**
+    Positive (Desirable) Examples:
+    - "You may set your own hours."
+    - "Work whenever you want."
     
-    * **Rule #1 - The Quote Mandate:** If a classification is 'YES', you MUST provide a direct, exact quote from the text in the 'reason' field. A 'YES' without a quote is an invalid analysis.
-    * **Rule #2 - The 'N/A' for 'NO' Mandate:** If a classification is 'NO', you MUST return the string 'N/A' in the 'reason' field. This helps confirm you analyzed the category.
-    * **Rule #3 - The Mutual Exclusivity Mandate:** A job CANNOT be both 'undesirable' and 'desirable' at the same time. If you find evidence for both, you must decide which evidence is STRONGER and MORE EXPLICIT. Classify the stronger one as 'YES' and the other MUST BE 'NO'.
+    Negative Examples:
+    - "Monday-Friday, 9am-5pm."
+    - "Remote work available."
+    - "Performs other duties as assigned."
     
-    **3. Keyword Evidence Guide**
-    Use these keywords to find evidence.
-    
-    * **Evidence for 'Undesired Flexibility':**
-        * **Mandatory Non-Standard Hours:** "work on weekends", "work on holidays", "on-call weekends", "weekend shifts", "holiday rotation", "on-call duty", "mandatory overtime".
-        * **Fixed & Inflexible Shift Work:** "rotating shifts", "shift work", "fixed shifts", "day and night shifts", "evening shifts required", and specific schedules like "6x1 schedule", "12x36 schedule", "5x2 with rotating days off".
-        * **Unpredictable & Company-Controlled Schedule:** "schedule subject to change", "schedule may vary based on business needs", "full schedule availability required", "must be flexible to work various shifts".
-    * **Evidence for 'Desirable Flexibility':**
-        * **Location Flexibility:** "remote work", "fully remote", "100% remote", "remote-first", "hybrid model", "home office", "work from anywhere", "telecommuting".
-        * **Time Flexibility:** "flexible hours", "flextime", "flexible schedule", "time bank", "core hours policy".
-        * **Schedule Autonomy:** "set your own schedule", "manage your own hours", "you build your timetable", "asynchronous work", "self-managed schedule".
-    
-    **4. Your Step-by-Step Task**
-    
-    1.  **Analyze the Job Description** provided below.
-    2.  **Evaluate Evidence** for both 'undesirable' and 'desirable' categories based on the keywords.
-    3.  **Apply the Rules,** especially the Mutual Exclusivity rule if needed.
-    4.  **Construct the final JSON** output precisely according to the structure.
-    
-    **Job Description:**
+    Job Description:
     {description}
     
-    **Required JSON Output Structure:**
-    ```json
+    Respond ONLY in this JSON format:
     {{
       "undesired_flexibility": "YES or NO",
-      "undesired_reason": "Exact quote from text if 'YES', or 'N/A' if 'NO'.",
+      "undesired_quote": "exact quote or 'N/A'",
       "desired_flexibility": "YES or NO",
-      "desired_reason": "Exact quote from text if 'YES', or 'N/A' if 'NO'."
+      "desired_quote": "exact quote or 'N/A'"
     }}
-    ```
     """
 
+
+# ----------- PROCESS LOGIC ------------
+def evaluate_hour_flexibility_local(description, ollama_url=OLLAMA_URL):
+    # 1. Usar o condense só para textos realmente grandes
+    condensed = condense_description(description)
+    prompt = build_flexibility_prompt(condensed)
     data = {
         "prompt": prompt,
-        "model": "llama3.2",
+        "model": MODEL_NAME,
         "format": "json",
         "stream": False,
-        "options": {
-            "temperature": 0.0,
-            "num_predict": 8192,
-        },
+        "options": {"temperature": 0.0, "num_predict": NUM_PREDICT},
     }
 
-    max_retries = 3
-    for attempt in range(max_retries):
+    for attempt in range(1, MAX_RETRIES + 1):
         try:
             with httpx.Client() as client:
+                logging.info(f"Request to Ollama (Attempt {attempt}/{MAX_RETRIES})")
                 start_time = time.time()
-                logging.info(f"Sending request to Ollama (Attempt {attempt + 1}/{max_retries})...")
-                response = client.post(
-                    ollama_url,
-                    json=data,
-                    timeout=60.0,
-                )
-
-                end_time = time.time()
-                elapsed_time = end_time - start_time
-                print(f"Generation time: {elapsed_time:.3f} seconds")
-
+                response = client.post(ollama_url, json=data, timeout=60.0)
+                elapsed_time = time.time() - start_time
+                logging.info(f"Ollama response in {elapsed_time:.3f} sec")
                 response.raise_for_status()
+                model_output = json.loads(response.json()["response"])
 
-                text_response = response.json()["response"]
-                final_response_json = json.loads(text_response)
+                undesired_flag = 1 if model_output.get("undesired_flexibility", "NO") == "YES" else 0
+                undesired_quote = model_output.get("undesired_quote", "")
+                desired_flag = 1 if model_output.get("desired_flexibility", "NO") == "YES" else 0
+                desired_quote = model_output.get("desired_quote", "")
 
-                # --- RAW VALUES FROM THE MODEL ---
-                model_undesired_flex = 1 if final_response_json.get("undesired_flexibility") == "YES" else 0
-                model_undesired_reason = final_response_json.get("undesired_reason", "")
-                model_desired_flex = 1 if final_response_json.get("desired_flexibility") == "YES" else 0
-                model_desired_reason = final_response_json.get("desired_reason", "")
+                # STRICT: Se ambos YES, prioriza o desejável
+                if undesired_flag and desired_flag:
+                    undesired_flag = 0
+                    undesired_quote = "N/A"
 
-                # *** NEW VALIDATION LOGIC (SAFETY CHECK) ***
-                # For Undesired
-                if model_undesired_flex == 1 and (model_undesired_reason.strip() == "" or model_undesired_reason.strip() == "N/A"):
-                    logging.warning(f"Inconsistency found for 'Undesired': Model returned YES without a quote. Overriding to NO.")
-                    final_undesired_flex = 0
-                    final_undesired_reason = ""
-                else:
-                    final_undesired_flex = model_undesired_flex
-                    final_undesired_reason = model_undesired_reason
+                # Robust quote validation: quote deve estar na descrição original (não só no trecho condensado)
+                if undesired_flag and (not undesired_quote.strip() or undesired_quote.strip() == "N/A" or undesired_quote not in description):
+                    # -------- NEM ATTEMPT OF QUOTE EXTRACTION --------
+                    alt_prompt = f"""
+                        The following job description was classified as 'undesirable flexibility' (schedule determined by the employer).
+                        Please highlight, copy, or extract the main phrase(s) or excerpt(s) from the text that justify this classification.
+                        If no single sentence exists, select the most relevant phrase(s) or combination of phrases that justify the decision.
+                        Job Description:
+                        {description}
+                        Only output the main excerpt(s).
+                        """
+                    alt_data = {
+                        "prompt": alt_prompt,
+                        "model": MODEL_NAME,
+                        "format": "text",
+                        "stream": False,
+                        "options": {"temperature": 0.0, "num_predict": NUM_PREDICT},
+                    }
+                    response_alt = client.post(ollama_url, json=alt_data, timeout=60.0)
+                    response_alt.raise_for_status()
+                    alt_quote = response_alt.json().get("response", "").strip()
+                    # Adiciona ao resultado, mesmo que não seja quote perfeita
+                    undesired_quote = alt_quote if alt_quote else "Model quote not found"
+                # Mesma lógica pode ser aplicada para Desired se quiser
+                if desired_flag and (not desired_quote.strip() or desired_quote.strip() == "N/A" or desired_quote not in description):
+                    # -------- NOVA TENTATIVA DE EXTRAÇÃO DE QUOTE PARA DESIRED --------
+                    alt_prompt = f"""
+                        The following job description was classified as 'desirable flexibility' (hours chosen by the employee).
+                        Please highlight, copy, or extract the main phrase(s) or excerpt(s) from the text that justify this classification.
+                        If no single sentence exists, select the most relevant phrase(s) or combination of phrases that justify the decision.
+                        Job Description:
+                        {description}
+                        Only output the main excerpt(s).
+                        """
+                    alt_data = {
+                        "prompt": alt_prompt,
+                        "model": MODEL_NAME,
+                        "format": "text",
+                        "stream": False,
+                        "options": {"temperature": 0.0, "num_predict": NUM_PREDICT},
+                    }
+                    response_alt = client.post(ollama_url, json=alt_data, timeout=60.0)
+                    response_alt.raise_for_status()
+                    alt_quote = response_alt.json().get("response", "").strip()
+                    desired_quote = alt_quote if alt_quote else "Model quote not found"
 
-                # For Desired
-                if model_desired_flex == 1 and (model_desired_reason.strip() == "" or model_desired_reason.strip() == "N/A"):
-                    logging.warning(f"Inconsistency found for 'Desired': Model returned YES without a quote. Overriding to NO.")
-                    final_desired_flex = 0
-                    final_desired_reason = ""
-                else:
-                    final_desired_flex = model_desired_flex
-                    final_desired_reason = model_desired_reason
+                return undesired_flag, undesired_quote, desired_flag, desired_quote
 
-                logging.info("Ollama response received and successfully validated.")
-                return final_undesired_flex, final_undesired_reason, final_desired_flex, final_desired_reason
-
-        except Exception as e:
-            logging.error(f"Attempt {attempt + 1} failed with an unexpected error: {e}")
-            if attempt + 1 == max_retries:
-                return 0, "", 0, ""
-
-        time.sleep(5)
-
+        except Exception as exc:
+            logging.error(f"Ollama attempt {attempt} failed: {exc}")
+            if attempt == MAX_RETRIES:
+                return 0, "Processing Error", 0, "Processing Error"
+            time.sleep(RETRY_SLEEP)
     return 0, "All processing attempts failed", 0, "All processing attempts failed"
 
 
-def read_input_files(directory="../input"):
-    """
-    Reads .csv and .xlsx files from the input directory, keeping and renaming
-    the columns of interest to 'Title' and 'Body'.
-    """
+# ----------- FILE READING ------------
+def read_input_files(directory=INPUT_DIR):
     df_list = []
-    files_were_read = False
-
     for filename in os.listdir(directory):
         if filename.startswith("~$") or filename == ".DS_Store":
             continue
-
         filepath = os.path.join(directory, filename)
         try:
             if filename.endswith(".csv"):
@@ -156,113 +198,85 @@ def read_input_files(directory="../input"):
             elif filename.endswith(".xlsx"):
                 temp_df = pd.read_excel(filepath, engine="openpyxl")
             else:
-                logging.warning(f"File {filename} is not .csv or .xlsx. Ignoring.")
+                logging.warning(f"Skipping unsupported file: {filename}")
                 continue
 
-            # Kept as in the previous version to read the input file correctly
-            body_column = next((col for col in temp_df.columns if col.lower() == "body"), None)
-            title_column = next((col for col in temp_df.columns if col.lower() == "title"), None)
-
-            if body_column is None or title_column is None:
-                logging.warning(f"File {filename} does not have 'Body' and/or 'Title' columns. Ignoring.")
+            body_col = next((col for col in temp_df.columns if col.lower() == "body"), None)
+            title_col = next((col for col in temp_df.columns if col.lower() == "title_name"), None)
+            if not body_col or not title_col:
+                logging.warning(f"Columns missing in {filename}. Skipped.")
                 continue
 
-            temp_df = temp_df[[title_column, body_column]]
-            temp_df.rename(columns={title_column: 'Title', body_column: 'Body'}, inplace=True)
+            temp_df = temp_df[[title_col, body_col]].rename(
+                columns={title_col: "Title", body_col: "Body"}
+            )
             df_list.append(temp_df)
-            files_were_read = True
-
         except Exception as e:
-            logging.error(f"Error reading file {filename}: {e}")
+            logging.error(f"Error reading {filename}: {e}")
 
-    if not files_were_read:
-        logging.warning(
-            "No valid files found or processed. Check the files in the 'input' folder."
-        )
+    if not df_list:
+        logging.warning("No valid input files found.")
         return None
+    return pd.concat(df_list, ignore_index=True)
 
-    return pd.concat(df_list, ignore_index=True) if df_list else None
 
-
+# ----------- SAVE FILE ------------
 def save_with_coloring(df, filepath):
-    """Saves the DataFrame to an Excel file, coloring the rows."""
     try:
         with pd.ExcelWriter(filepath, engine='openpyxl') as writer:
             df.to_excel(writer, index=False, sheet_name='Processed_Jobs')
-
-            workbook = writer.book
             worksheet = writer.sheets['Processed_Jobs']
 
             red_fill = PatternFill(start_color='FFC7CE', end_color='FFC7CE', fill_type='solid')
             green_fill = PatternFill(start_color='C6EFCE', end_color='C6EFCE', fill_type='solid')
 
-            try:
-                undesired_col_idx = df.columns.get_loc("Undesired_flexibility_dummy") + 1
-                desired_col_idx = df.columns.get_loc("Desired_flexibility_dummy") + 1
-            except KeyError as e:
-                logging.error(f"Column not found in the final DataFrame: {e}. Coloring will not be possible.")
-                return
+            undesired_col = df.columns.get_loc("Undesired_flexibility_dummy") + 1
+            desired_col = df.columns.get_loc("Desired_flexibility_dummy") + 1
 
             for row_idx in range(2, worksheet.max_row + 1):
-                undesired_cell_value = worksheet.cell(row=row_idx, column=undesired_col_idx).value
-                desired_cell_value = worksheet.cell(row=row_idx, column=desired_col_idx).value
+                undesired_val = worksheet.cell(row=row_idx, column=undesired_col).value
+                desired_val = worksheet.cell(row=row_idx, column=desired_col).value
 
-                fill_to_apply = None
-                if undesired_cell_value == 1:
-                    fill_to_apply = red_fill
-                elif desired_cell_value == 1:
-                    fill_to_apply = green_fill
-
-                if fill_to_apply:
+                fill = red_fill if undesired_val == 1 else green_fill if desired_val == 1 else None
+                if fill:
                     for cell in worksheet[row_idx]:
-                        cell.fill = fill_to_apply
-
-        logging.info(f"File saved successfully with colors at: {filepath}")
-
+                        cell.fill = fill
+        logging.info(f"Excel saved: {filepath}")
     except Exception as e:
-        logging.error(f"Error saving the Excel file with formatting: {e}")
+        logging.error(f"Error saving Excel: {e}")
 
 
+# ----------- MAIN ------------
 def main():
-    """Main function to read, process, and save the data."""
     df = read_input_files()
     if df is None:
-        logging.error("No valid input files found. Exiting.")
+        logging.error("No valid input files to process.")
         return
 
-    new_columns = [
+    new_cols = [
         "Undesired_flexibility_dummy", "quote_body_undesired",
         "Desired_flexibility_dummy", "quote_body_desired"
     ]
-    for col in new_columns:
+    for col in new_cols:
         df[col] = ""
 
-    for index, row in tqdm(df.iterrows(), total=len(df), desc="Analyzing jobs"):
+    for idx, row in tqdm(df.iterrows(), total=len(df), desc="Analyzing jobs"):
         description = row["Body"]
-        if pd.isna(description) or not isinstance(description, str) or description.strip() == "":
-            logging.warning(f"Empty or invalid description on row {index}. Skipping.")
+        if pd.isna(description) or not isinstance(description, str) or not description.strip():
             results = (0, "Empty description", 0, "Empty description")
         else:
             results = evaluate_hour_flexibility_local(description)
+        df.loc[idx, new_cols] = results
+        for q in ["quote_body_undesired", "quote_body_desired"]:
+            if df.loc[idx, q] == "N/A":
+                df.loc[idx, q] = ""
 
-        df.loc[index, new_columns] = results
-
-        # Clears the 'N/A' that may come from the model to leave the Excel cell empty
-        if df.loc[index, "quote_body_undesired"] == "N/A":
-            df.loc[index, "quote_body_undesired"] = ""
-        if df.loc[index, "quote_body_desired"] == "N/A":
-            df.loc[index, "quote_body_desired"] = ""
-
-    final_columns_order = [
+    final_cols = [
         "Title", "Body",
         "Undesired_flexibility_dummy", "quote_body_undesired",
         "Desired_flexibility_dummy", "quote_body_desired"
     ]
-    final_df = df[final_columns_order]
-
-    output_filepath = os.path.join("../output/results", "Job_postings_processed.xlsx")
-    save_with_coloring(final_df, output_filepath)
-
+    save_with_coloring(df[final_cols], OUTPUT_PATH)
     logging.info("Processing completed.")
 
 
