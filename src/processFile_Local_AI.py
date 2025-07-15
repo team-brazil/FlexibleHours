@@ -12,7 +12,7 @@ INPUT_DIR = "../input"
 OLLAMA_URL = "http://localhost:11434/api/generate"
 MODEL_NAME = "llama3.2"
 OUTPUT_PATH = "../output/results/Job_postings_processed_" + MODEL_NAME + ".xlsx"
-NUM_PREDICT = 200
+NUM_PREDICT = 64
 MAX_RETRIES = 3
 RETRY_SLEEP = 5
 
@@ -52,56 +52,10 @@ def condense_description(description, window=3, min_length=2000):
 # ----------- PROMPT ------------
 def build_flexibility_prompt(description):
     return f"""
-    You are an expert HR analyst. Your task is to classify ONLY the *work hours flexibility* in job descriptions.
-    
-    Definitions:
-    - **Undesirable Flexibility (Company-Driven Hours):** The employer or company can require, change, or set the work schedule as needed for business reasons. This includes requirements for availability at nights, weekends, holidays, rotating shifts, or any situation where the employee must be flexible to company needs.
-    - **Desirable Flexibility (Employee-Driven Hours):** The employee chooses their own work hours, for example: “set your own schedule,” “work anytime,” “make your own hours.” Flexibility is desirable ONLY if the employee controls when they work.
-    - **Neutral:** Standard, fixed schedule (e.g. "Monday-Friday, 9am-5pm") or no explicit mention of flexibility.
-    
-    **Important Instructions:**
-    1. Mark "undesired_flexibility" as "YES" if the job description says or implies that the employer can change, rotate, or adjust the employee's work schedule or shifts as needed by the company. 
-        - Do NOT mark "undesired_flexibility" as "YES" just because the schedule is at night, on weekends, includes holidays, or is labeled "flexible", unless there is clear evidence that the employer can change or adjust the schedule after hiring.
-        - Do NOT mark as undesirable just because multiple shifts or "open availability" are listed—only if it says the employee can be moved or assigned at the company's discretion.
-    2. Mark "desirable_flexibility" as "YES" only if the employee can choose their own work hours without company constraints.
-    3. If both conditions are present, always prioritize and mark "desirable_flexibility" as "YES", and "undesired_flexibility" as "NO".
-    4. If neither condition is met, mark both as "NO".
-    5. Only consider work hours flexibility. Ignore flexibility about job location (remote, hybrid, work from home), company values, or general requirements not related to work schedule.
-    6. For every "YES", provide a single exact, continuous quote from the job description as justification. For every "NO", return "N/A" as the quote.
-    
-    **Positive (Undesired) Examples:**
-    - “May be required to work weekend.”
-    - “MUST be flexible and able to work weekends.”
-    - “Position may be required to work extended hours as needed.”
-    - “You may be assigned to different routes each day.”
-    - “Flexible work schedule to meet business needs.”
-    - “Able to work a flexible schedule including evenings, weekends, and holidays.”
-    - “Ability to work flexible schedule, including nights, weekends, and holidays as needed.”
-    *(All of these mean the company controls the hours, not the employee.)*
-    
-    **Positive (Desirable) Examples:**
-    - “You may set your own hours.”
-    - “Drop a scheduled shift when life happens and you need to adjust.”
-    - “Flexible schedule can start between 7am or 8am, your choice.”
-    - “Your gig, your schedule.”
-    *(All of these mean the employee controls the hours, not the company.)*
-    
-    **Negative Examples:**
-    - “Standard 9-5, Monday-Friday.”
-    - “Remote work available.”
-    - “Performs other duties as assigned.”
-    - “You will have the support you need to accomplish your goals.”
-    - “Ability to work as part of a team.”
-    
-    Job Description:
-    {description}
-    
+    Hey are you ok? If you are respond yes, if no respond no
     Respond ONLY in this JSON format:
     {{
-      "undesired_flexibility": "YES or NO",
-      "undesired_quote": "exact quote or 'N/A'",
-      "desired_flexibility": "YES or NO",
-      "desired_quote": "exact quote or 'N/A'",
+      "response": "YES or NO",
     }}
     """
 
