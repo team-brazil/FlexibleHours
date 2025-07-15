@@ -10,7 +10,7 @@ from openpyxl.styles import PatternFill
 # === CONFIG ===
 INPUT_DIR = "../input"
 OLLAMA_URL = "http://localhost:11434/api/generate"
-MODEL_NAME = "llama3:8b"
+MODEL_NAME = "llama3.2"
 OUTPUT_PATH = "../output/results/Job_postings_processed_" + MODEL_NAME + ".xlsx"
 NUM_PREDICT = 200
 MAX_RETRIES = 3
