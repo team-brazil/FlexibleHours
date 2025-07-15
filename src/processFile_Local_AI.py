@@ -60,7 +60,6 @@ def build_flexibility_prompt(description):
     - **Neutral:** Standard, fixed schedule (e.g. "Monday-Friday, 9am-5pm") or no explicit mention of flexibility.
     
     **Important Instructions:**
-    1. Mark "undesired_flexibility" as "YES" when the company/employer expects the employee to adapt their schedule to company needs, including nights, weekends, holidays, rotating shifts, or availability "as needed" or "to meet business needs."
     1. Mark "undesired_flexibility" as "YES" if the job description says or implies that the employer can change, rotate, or adjust the employee's work schedule or shifts as needed by the company. 
         - Do NOT mark "undesired_flexibility" as "YES" just because the schedule is at night, on weekends, includes holidays, or is labeled "flexible", unless there is clear evidence that the employer can change or adjust the schedule after hiring.
         - Do NOT mark as undesirable just because multiple shifts or "open availability" are listed—only if it says the employee can be moved or assigned at the company's discretion.
@@ -103,7 +102,6 @@ def build_flexibility_prompt(description):
       "undesired_quote": "exact quote or 'N/A'",
       "desired_flexibility": "YES or NO",
       "desired_quote": "exact quote or 'N/A'",
-      "reasoning": "your full step-by-step reasoning, as a single string"
     }}
     """
 
@@ -136,8 +134,6 @@ def evaluate_hour_flexibility_local(description, ollama_url=OLLAMA_URL):
                 undesired_quote = model_output.get("undesired_quote", "")
                 desired_flag = 1 if model_output.get("desired_flexibility", "NO") == "YES" else 0
                 desired_quote = model_output.get("desired_quote", "")
-                reasoning = model_output.get("reasoning", "")
-
 
             # STRICT: Se ambos YES, prioriza o desejável
                 if undesired_flag and desired_flag:
