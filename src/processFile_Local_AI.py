@@ -10,7 +10,7 @@ from openpyxl.styles import PatternFill
 # === CONFIG ===
 INPUT_DIR = "../input"
 OLLAMA_URL = "http://localhost:11434/api/generate"
-MODEL_NAME = "llama3.2"
+MODEL_NAME = "llama3:8b"
 OUTPUT_PATH = "../output/results/Job_postings_processed_" + MODEL_NAME + ".xlsx"
 NUM_PREDICT = 64
 MAX_RETRIES = 3
@@ -51,12 +51,11 @@ def condense_description(description, window=3, min_length=2000):
 
 # ----------- PROMPT ------------
 def build_flexibility_prompt(description):
-    return f"""
-    Hey are you ok? If you are respond yes, if no respond no
+    return """
     Respond ONLY in this JSON format:
-    {{
-      "response": "YES or NO",
-    }}
+    {
+      "answer": "YES"
+    }
     """
 
 
@@ -107,7 +106,7 @@ def evaluate_hour_flexibility_local(description, ollama_url=OLLAMA_URL):
                     alt_data = {
                         "prompt": alt_prompt,
                         "model": MODEL_NAME,
-                        "format": "text",
+                        "format": "json",
                         "stream": False,
                         "options": {"temperature": 0.0, "num_predict": NUM_PREDICT},
                     }
@@ -129,7 +128,7 @@ def evaluate_hour_flexibility_local(description, ollama_url=OLLAMA_URL):
                     alt_data = {
                         "prompt": alt_prompt,
                         "model": MODEL_NAME,
-                        "format": "text",
+                        "format": "json",
                         "stream": False,
                         "options": {"temperature": 0.0, "num_predict": NUM_PREDICT},
                     }
