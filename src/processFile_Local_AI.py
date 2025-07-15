@@ -10,7 +10,7 @@ from openpyxl.styles import PatternFill
 # === CONFIG ===
 INPUT_DIR = "../input"
 OLLAMA_URL = "http://localhost:11434/api/generate"
-MODEL_NAME = "llama3.2"
+MODEL_NAME = "llama3:8b"
 OUTPUT_PATH = "../output/results/Job_postings_processed_" + MODEL_NAME + ".xlsx"
 NUM_PREDICT = 200
 MAX_RETRIES = 3
@@ -52,35 +52,47 @@ def condense_description(description, window=3, min_length=2000):
 # ----------- PROMPT ------------
 def build_flexibility_prompt(description):
     return f"""
-    You are an expert HR analyst. Classify the work hours flexibility in the job description.
-
+    You are an expert HR analyst. Your task is to classify ONLY the *work hours flexibility* in job descriptions.
+    
     Definitions:
-    - "Undesirable Flexibility": The company/employer controls or can change the work schedule to fit business needs (e.g. "may need to work as required", "rotating shifts", "schedule subject to change by manager").
-    - "Desirable Flexibility": The employee chooses when to work ("set your own schedule", "work any hours you want").
-    - "Neutral": Standard, fixed schedule or not mentioned.
+    - **Undesirable Flexibility (Company-Driven Hours):** The employer or company can require, change, or set the work schedule as needed for business reasons. This includes requirements for availability at nights, weekends, holidays, rotating shifts, or any situation where the employee must be flexible to company needs.
+    - **Desirable Flexibility (Employee-Driven Hours):** The employee chooses their own work hours, for example: “set your own schedule,” “work anytime,” “make your own hours.” Flexibility is desirable ONLY if the employee controls when they work.
+    - **Neutral:** Standard, fixed schedule (e.g. "Monday-Friday, 9am-5pm") or no explicit mention of flexibility.
     
-    Instructions:
-    - Mark "undesired_flexibility" as "YES" whenever there is a clear indication that the employer may set, change, or demand variable/unpredictable hours.
-    - Mark "desirable_flexibility" as "YES" if the employee decides their work hours.
-    - If both, prioritize "desirable flexibility".
-    - If neither, answer "NO" for both.
-    - Only consider *hours/schedule* flexibility.
-    - Copy the exact phrase for "YES" cases as quote; otherwise "N/A".
+    **Important Instructions:**
+    1. Mark "undesired_flexibility" as "YES" when the company/employer expects the employee to adapt their schedule to company needs, including nights, weekends, holidays, rotating shifts, or availability "as needed" or "to meet business needs."
+    1. Mark "undesired_flexibility" as "YES" if the job description says or implies that the employer can change, rotate, or adjust the employee's work schedule or shifts as needed by the company. 
+        - Do NOT mark "undesired_flexibility" as "YES" just because the schedule is at night, on weekends, includes holidays, or is labeled "flexible", unless there is clear evidence that the employer can change or adjust the schedule after hiring.
+        - Do NOT mark as undesirable just because multiple shifts or "open availability" are listed—only if it says the employee can be moved or assigned at the company's discretion.
+    2. Mark "desirable_flexibility" as "YES" only if the employee can choose their own work hours without company constraints.
+    3. If both conditions are present, always prioritize and mark "desirable_flexibility" as "YES", and "undesired_flexibility" as "NO".
+    4. If neither condition is met, mark both as "NO".
+    5. Only consider work hours flexibility. Ignore flexibility about job location (remote, hybrid, work from home), company values, or general requirements not related to work schedule.
+    6. For every "YES", provide a single exact, continuous quote from the job description as justification. For every "NO", return "N/A" as the quote.
     
-    Positive (Undesired) Examples:
-    - "May be required to work weekends or holidays."
-    - "Rotating schedule required."
-    - "Availability to work a flexible schedule to meet company needs."
-    - "Must be able to work overtime as needed."
+    **Positive (Undesired) Examples:**
+    - “May be required to work weekend.”
+    - “MUST be flexible and able to work weekends.”
+    - “Position may be required to work extended hours as needed.”
+    - “You may be assigned to different routes each day.”
+    - “Flexible work schedule to meet business needs.”
+    - “Able to work a flexible schedule including evenings, weekends, and holidays.”
+    - “Ability to work flexible schedule, including nights, weekends, and holidays as needed.”
+    *(All of these mean the company controls the hours, not the employee.)*
     
-    Positive (Desirable) Examples:
-    - "You may set your own hours."
-    - "Work whenever you want."
+    **Positive (Desirable) Examples:**
+    - “You may set your own hours.”
+    - “Drop a scheduled shift when life happens and you need to adjust.”
+    - “Flexible schedule can start between 7am or 8am, your choice.”
+    - “Your gig, your schedule.”
+    *(All of these mean the employee controls the hours, not the company.)*
     
-    Negative Examples:
-    - "Monday-Friday, 9am-5pm."
-    - "Remote work available."
-    - "Performs other duties as assigned."
+    **Negative Examples:**
+    - “Standard 9-5, Monday-Friday.”
+    - “Remote work available.”
+    - “Performs other duties as assigned.”
+    - “You will have the support you need to accomplish your goals.”
+    - “Ability to work as part of a team.”
     
     Job Description:
     {description}
@@ -90,7 +102,8 @@ def build_flexibility_prompt(description):
       "undesired_flexibility": "YES or NO",
       "undesired_quote": "exact quote or 'N/A'",
       "desired_flexibility": "YES or NO",
-      "desired_quote": "exact quote or 'N/A'"
+      "desired_quote": "exact quote or 'N/A'",
+      "reasoning": "your full step-by-step reasoning, as a single string"
     }}
     """
 
@@ -98,8 +111,8 @@ def build_flexibility_prompt(description):
 # ----------- PROCESS LOGIC ------------
 def evaluate_hour_flexibility_local(description, ollama_url=OLLAMA_URL):
     # 1. Usar o condense só para textos realmente grandes
-    condensed = condense_description(description)
-    prompt = build_flexibility_prompt(condensed)
+    # condensed = condense_description(description)
+    prompt = build_flexibility_prompt(description)
     data = {
         "prompt": prompt,
         "model": MODEL_NAME,
@@ -123,15 +136,16 @@ def evaluate_hour_flexibility_local(description, ollama_url=OLLAMA_URL):
                 undesired_quote = model_output.get("undesired_quote", "")
                 desired_flag = 1 if model_output.get("desired_flexibility", "NO") == "YES" else 0
                 desired_quote = model_output.get("desired_quote", "")
+                reasoning = model_output.get("reasoning", "")
 
-                # STRICT: Se ambos YES, prioriza o desejável
+
+            # STRICT: Se ambos YES, prioriza o desejável
                 if undesired_flag and desired_flag:
                     undesired_flag = 0
                     undesired_quote = "N/A"
 
-                # Robust quote validation: quote deve estar na descrição original (não só no trecho condensado)
+                # Tentar extração alternativa de quote para Undesired se necessário
                 if undesired_flag and (not undesired_quote.strip() or undesired_quote.strip() == "N/A" or undesired_quote not in description):
-                    # -------- NEM ATTEMPT OF QUOTE EXTRACTION --------
                     alt_prompt = f"""
                         The following job description was classified as 'undesirable flexibility' (schedule determined by the employer).
                         Please highlight, copy, or extract the main phrase(s) or excerpt(s) from the text that justify this classification.
@@ -150,11 +164,10 @@ def evaluate_hour_flexibility_local(description, ollama_url=OLLAMA_URL):
                     response_alt = client.post(ollama_url, json=alt_data, timeout=60.0)
                     response_alt.raise_for_status()
                     alt_quote = response_alt.json().get("response", "").strip()
-                    # Adiciona ao resultado, mesmo que não seja quote perfeita
                     undesired_quote = alt_quote if alt_quote else "Model quote not found"
-                # Mesma lógica pode ser aplicada para Desired se quiser
+
+                # Tentar extração alternativa de quote para Desired se necessário
                 if desired_flag and (not desired_quote.strip() or desired_quote.strip() == "N/A" or desired_quote not in description):
-                    # -------- NOVA TENTATIVA DE EXTRAÇÃO DE QUOTE PARA DESIRED --------
                     alt_prompt = f"""
                         The following job description was classified as 'desirable flexibility' (hours chosen by the employee).
                         Please highlight, copy, or extract the main phrase(s) or excerpt(s) from the text that justify this classification.
@@ -174,6 +187,12 @@ def evaluate_hour_flexibility_local(description, ollama_url=OLLAMA_URL):
                     response_alt.raise_for_status()
                     alt_quote = response_alt.json().get("response", "").strip()
                     desired_quote = alt_quote if alt_quote else "Model quote not found"
+
+                # --- Pós-processamento: Só preenche quote se dummy == 1 ---
+                if undesired_flag == 0:
+                    undesired_quote = ""
+                if desired_flag == 0:
+                    desired_quote = ""
 
                 return undesired_flag, undesired_quote, desired_flag, desired_quote
 
