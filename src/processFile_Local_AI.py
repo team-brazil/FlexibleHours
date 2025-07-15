@@ -121,7 +121,7 @@ def evaluate_hour_flexibility_local(description, ollama_url=OLLAMA_URL):
             with httpx.Client() as client:
                 logging.info(f"Request to Ollama (Attempt {attempt}/{MAX_RETRIES})")
                 start_time = time.time()
-                response = client.post(ollama_url, json=data, timeout=60.0)
+                response = client.post(ollama_url, json=data, timeout=120.0)
                 elapsed_time = time.time() - start_time
                 logging.info(f"Ollama response in {elapsed_time:.3f} sec")
                 response.raise_for_status()
