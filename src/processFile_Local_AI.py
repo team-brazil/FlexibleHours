@@ -181,5 +181,5 @@ def process_job_postings(input_path):
 # ----------- Execução principal -----------
 if __name__ == "__main__":
     # Exemplo: processar um arquivo input específico
-    input_file = os.path.join(INPUT_DIR, "wrong_classificated_undesired_flexibility.xlsx")
+    input_file = os.path.join(INPUT_DIR, "Job_postings_input.xlsx")
     process_job_postings(input_file)
