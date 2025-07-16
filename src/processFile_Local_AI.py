@@ -11,17 +11,20 @@ from openpyxl.styles import PatternFill
 INPUT_DIR = "../input"
 OLLAMA_URL = "http://localhost:11434/api/generate"
 MODEL_NAME = "llama3:8b"
-OUTPUT_PATH = "../output/results/Job_postings_processed_" + MODEL_NAME + ".xlsx"
+OUTPUT_PATH = f"../output/results/Job_postings_processed_{MODEL_NAME}.xlsx"
 NUM_PREDICT = 200
 MAX_RETRIES = 2
 RETRY_SLEEP = 3
+
+BATCH_SIZE = 20
+BATCH_SAVE_PREFIX = "../output/results/batch_temp"
 
 logging.basicConfig(
     level=logging.INFO, format="%(asctime)s - %(levelname)s - %(message)s"
 )
 
 
-# ----------- NEW CONDENSE_DESCRIPTION ------------
+# ----------- NEW condense_description (mantida) ------------
 def condense_description(description, window=3, min_length=2000):
     """
     Só aplica o filtro se o texto for realmente longo.
@@ -35,7 +38,8 @@ def condense_description(description, window=3, min_length=2000):
         "holiday", "holidays", "night", "nights", "irregular", "on-call",
         "availability", "as needed", "rotating", "rotational", "hours", "hourly",
         "mandatory", "split shift", "split-shift", "variable", "overtime", "call-in",
-        "unpredictable", "as required", "required to", "vary", "subject to", "full availability"
+        "unpredictable", "as required", "required to", "vary", "subject to", "full availability",
+        "prn"
     ]
     lines = description.split('\n')
     lines = [l for l in lines if l.strip() != ""]
@@ -49,220 +53,121 @@ def condense_description(description, window=3, min_length=2000):
     return "\n".join(lines[i] for i in sorted(keyword_matches))
 
 
-# ----------- PROMPT ------------
+# ----------- PROMPT JSON REFINADO ------------
 def build_flexibility_prompt(description):
     return f"""
-    You are an expert HR analyst. Analyze the job description below. Respond ONLY in this JSON format:
-    {
-        "undesired_flexibility": "YES" or "NO",
-        "undesired_quote": "exact quote or 'N/A'",
-        "desired_flexibility": "YES" or "NO",
-        "desired_quote": "exact quote or 'N/A'",
-        "reasoning": "Your step-by-step reasoning, max 400 characters"
-    }
-    
-    Rules:
-    - "undesired_flexibility" is "YES" if there is any sign the employer can impose schedule changes, unpredictable shifts, "as needed", "PRN", "weekend availability", etc.
-    - "desired_flexibility" is "YES" if the employee can control when they work, like "set your own schedule", "work from anywhere".
-    - Only use direct quotes from the description in the quote fields, or 'N/A' if none found.
-    - If both apply, both YES with their quotes.
-    - Your reasoning must be concise and less than 400 characters.
-    - Do NOT output anything outside the JSON.
-    
-    Job Description:
-    {description}
-    """
+You are an expert HR analyst. Analyze the job description below. Respond ONLY in this JSON format:
+{{
+  "undesired_flexibility": "YES" or "NO",
+  "undesired_quote": "exact quote or 'N/A'",
+  "desired_flexibility": "YES" or "NO",
+  "desired_quote": "exact quote or 'N/A'",
+  "reasoning": "Your step-by-step reasoning, max 400 characters"
+}}
+
+Rules:
+- "undesired_flexibility" is "YES" if there is any sign the employer can impose schedule changes, unpredictable shifts, "as needed", "PRN", "weekend availability", etc.
+- "desired_flexibility" is "YES" if the employee can control when they work, like "set your own schedule", "work from anywhere".
+- Only use direct quotes from the description in the quote fields, or 'N/A' if none found.
+- If both apply, both YES with their quotes.
+- Your reasoning must be concise and less than 400 characters.
+- Do NOT output anything outside the JSON.
+
+Job Description:
+{description}
+"""
 
 
-# ----------- PROCESS LOGIC ------------
-def evaluate_hour_flexibility_local(description, ollama_url=OLLAMA_URL):
-    # 1. Usar o condense só para textos realmente grandes
-    # condensed = condense_description(description)
-    prompt = build_flexibility_prompt(description)
-    data = {
-        "prompt": prompt,
-        "model": MODEL_NAME,
-        "format": "json",
-        "stream": False,
-        "options": {"temperature": 0.0, "num_predict": NUM_PREDICT},
-    }
-
-    for attempt in range(1, MAX_RETRIES + 1):
+# ----------- Função para chamada à API OLLAMA -----------
+def call_ollama_api(prompt, max_retries=MAX_RETRIES, retry_sleep=RETRY_SLEEP):
+    for attempt in range(max_retries):
         try:
-            with httpx.Client() as client:
-                logging.info(f"Request to Ollama (Attempt {attempt}/{MAX_RETRIES})")
-                start_time = time.time()
-                response = client.post(ollama_url, json=data, timeout=120.0)
-                elapsed_time = time.time() - start_time
-                logging.info(f"Ollama response in {elapsed_time:.3f} sec")
-                response.raise_for_status()
-                model_output = json.loads(response.json()["response"])
-
-                undesired_flag = 1 if model_output.get("undesired_flexibility", "NO") == "YES" else 0
-                undesired_quote = model_output.get("undesired_quote", "")
-                desired_flag = 1 if model_output.get("desired_flexibility", "NO") == "YES" else 0
-                desired_quote = model_output.get("desired_quote", "")
-                reasoning = model_output.get("reasoning", "")
-
-            # STRICT: Se ambos YES, prioriza o desejável
-                if undesired_flag and desired_flag:
-                    undesired_flag = 0
-                    undesired_quote = "N/A"
-
-                # Tentar extração alternativa de quote para Undesired se necessário
-                if undesired_flag and (not undesired_quote.strip() or undesired_quote.strip() == "N/A" or undesired_quote not in description):
-                    alt_prompt = f"""
-                        The following job description was classified as 'undesirable flexibility' (schedule determined by the employer).
-                        Please highlight, copy, or extract the main phrase(s) or excerpt(s) from the text that justify this classification.
-                        If no single sentence exists, select the most relevant phrase(s) or combination of phrases that justify the decision.
-                        Job Description:
-                        {description}
-                        Only output the main excerpt(s).
-                        """
-                    alt_data = {
-                        "prompt": alt_prompt,
-                        "model": MODEL_NAME,
-                        "format": "json",
-                        "stream": False,
-                        "options": {"temperature": 0.0, "num_predict": NUM_PREDICT},
-                    }
-                    response_alt = client.post(ollama_url, json=alt_data, timeout=60.0)
-                    response_alt.raise_for_status()
-                    alt_quote = response_alt.json().get("response", "").strip()
-                    undesired_quote = alt_quote if alt_quote else "Model quote not found"
-
-                # Tentar extração alternativa de quote para Desired se necessário
-                if desired_flag and (not desired_quote.strip() or desired_quote.strip() == "N/A" or desired_quote not in description):
-                    alt_prompt = f"""
-                        The following job description was classified as 'desirable flexibility' (hours chosen by the employee).
-                        Please highlight, copy, or extract the main phrase(s) or excerpt(s) from the text that justify this classification.
-                        If no single sentence exists, select the most relevant phrase(s) or combination of phrases that justify the decision.
-                        Job Description:
-                        {description}
-                        Only output the main excerpt(s).
-                        """
-                    alt_data = {
-                        "prompt": alt_prompt,
-                        "model": MODEL_NAME,
-                        "format": "json",
-                        "stream": False,
-                        "options": {"temperature": 0.0, "num_predict": NUM_PREDICT},
-                    }
-                    response_alt = client.post(ollama_url, json=alt_data, timeout=60.0)
-                    response_alt.raise_for_status()
-                    alt_quote = response_alt.json().get("response", "").strip()
-                    desired_quote = alt_quote if alt_quote else "Model quote not found"
-
-                # --- Pós-processamento: Só preenche quote se dummy == 1 ---
-                if undesired_flag == 0:
-                    undesired_quote = ""
-                if desired_flag == 0:
-                    desired_quote = ""
-
-                return undesired_flag, undesired_quote, desired_flag, desired_quote, reasoning
-
-        except Exception as exc:
-            logging.error(f"Ollama attempt {attempt} failed: {exc}")
-            if attempt == MAX_RETRIES:
-                return 0, "Processing Error", 0, "Processing Error"
-            time.sleep(RETRY_SLEEP)
-    return 0, "All processing attempts failed", 0, "All processing attempts failed"
-
-
-# ----------- FILE READING ------------
-def read_input_files(directory=INPUT_DIR):
-    df_list = []
-    for filename in os.listdir(directory):
-        if filename.startswith("~$") or filename == ".DS_Store":
-            continue
-        filepath = os.path.join(directory, filename)
-        try:
-            if filename.endswith(".csv"):
-                temp_df = pd.read_csv(filepath, encoding="utf-8")
-            elif filename.endswith(".xlsx"):
-                temp_df = pd.read_excel(filepath, engine="openpyxl")
-            else:
-                logging.warning(f"Skipping unsupported file: {filename}")
-                continue
-
-            body_col = next((col for col in temp_df.columns if col.lower() == "body"), None)
-            title_col = next((col for col in temp_df.columns if col.lower() == "title_name"), None)
-            if not body_col or not title_col:
-                logging.warning(f"Columns missing in {filename}. Skipped.")
-                continue
-
-            temp_df = temp_df[[title_col, body_col]].rename(
-                columns={title_col: "Title", body_col: "Body"}
+            response = httpx.post(
+                OLLAMA_URL,
+                json={
+                    "model": MODEL_NAME,
+                    "prompt": prompt,
+                    "stream": False
+                },
+                timeout=120
             )
-            df_list.append(temp_df)
+            if response.status_code == 200:
+                return response.json()["response"]
+            else:
+                logging.warning(f"Status {response.status_code}: {response.text}")
         except Exception as e:
-            logging.error(f"Error reading {filename}: {e}")
-
-    if not df_list:
-        logging.warning("No valid input files found.")
-        return None
-    return pd.concat(df_list, ignore_index=True)
+            logging.error(f"Erro ao chamar Ollama: {e}")
+        time.sleep(retry_sleep)
+    return None
 
 
-# ----------- SAVE FILE ------------
-def save_with_coloring(df, filepath):
+# ----------- Função para parsing seguro do JSON retornado -----------
+def safe_parse_json(llm_output):
+    """
+    Extrai e faz o parsing do primeiro bloco JSON válido encontrado na resposta.
+    """
     try:
-        with pd.ExcelWriter(filepath, engine='openpyxl') as writer:
-            df.to_excel(writer, index=False, sheet_name='Processed_Jobs')
-            worksheet = writer.sheets['Processed_Jobs']
-
-            red_fill = PatternFill(start_color='FFC7CE', end_color='FFC7CE', fill_type='solid')
-            green_fill = PatternFill(start_color='C6EFCE', end_color='C6EFCE', fill_type='solid')
-
-            undesired_col = df.columns.get_loc("Undesired_flexibility_dummy") + 1
-            desired_col = df.columns.get_loc("Desired_flexibility_dummy") + 1
-
-            for row_idx in range(2, worksheet.max_row + 1):
-                undesired_val = worksheet.cell(row=row_idx, column=undesired_col).value
-                desired_val = worksheet.cell(row=row_idx, column=desired_col).value
-
-                fill = red_fill if undesired_val == 1 else green_fill if desired_val == 1 else None
-                if fill:
-                    for cell in worksheet[row_idx]:
-                        cell.fill = fill
-        logging.info(f"Excel saved: {filepath}")
+        start = llm_output.find('{')
+        end = llm_output.rfind('}') + 1
+        if start == -1 or end == -1:
+            return None
+        json_str = llm_output[start:end]
+        return json.loads(json_str)
     except Exception as e:
-        logging.error(f"Error saving Excel: {e}")
+        logging.warning(f"Erro ao parsear JSON: {e}\nOutput bruto: {llm_output}")
+        return None
 
 
-# ----------- MAIN ------------
-def main():
-    df = read_input_files()
-    if df is None:
-        logging.error("No valid input files to process.")
-        return
-
-    new_cols = [
-        "Undesired_flexibility_dummy", "quote_body_undesired",
-        "Desired_flexibility_dummy", "quote_body_desired"
-    ]
-    for col in new_cols:
-        df[col] = ""
-
-    for idx, row in tqdm(df.iterrows(), total=len(df), desc="Analyzing jobs"):
-        description = row["Body"]
-        if pd.isna(description) or not isinstance(description, str) or not description.strip():
-            results = (0, "Empty description", 0, "Empty description")
-        else:
-            results = evaluate_hour_flexibility_local(description)
-        df.loc[idx, new_cols] = results
-        for q in ["quote_body_undesired", "quote_body_desired"]:
-            if df.loc[idx, q] == "N/A":
-                df.loc[idx, q] = ""
-
-    final_cols = [
-        "Title", "Body",
-        "Undesired_flexibility_dummy", "quote_body_undesired",
-        "Desired_flexibility_dummy", "quote_body_desired", "reasoning"
-    ]
-    save_with_coloring(df[final_cols], OUTPUT_PATH)
-    logging.info("Processing completed.")
+# ----------- Função para salvar em lotes -----------
+def save_batches(results, batch_size, save_path_prefix):
+    if len(results) % batch_size == 0 and len(results) > 0:
+        batch_number = len(results) // batch_size
+        df = pd.DataFrame(results)
+        save_path = f"{save_path_prefix}_{batch_number}.xlsx"
+        df.to_excel(save_path, index=False)
+        logging.info(f"Batch salvo: {save_path}")
 
 
+# ----------- Main Pipeline -----------
+def process_job_postings(input_path):
+    df = pd.read_excel(input_path)
+    results = []
+    for idx, row in tqdm(df.iterrows(), total=len(df)):
+        desc = row.get("Body") or row.get("body") or ""
+        short_desc = condense_description(desc)
+        prompt = build_flexibility_prompt(short_desc)
+        response = call_ollama_api(prompt)
+        parsed = safe_parse_json(response) if response else None
+
+        # Prepara registro para salvar
+        registro = {
+            "Title": row.get("Title", ""),
+            "Body": desc,
+            "llama_raw_response": response,
+            "undesired_flexibility": parsed.get("undesired_flexibility") if parsed else None,
+            "undesired_quote": parsed.get("undesired_quote") if parsed else None,
+            "desired_flexibility": parsed.get("desired_flexibility") if parsed else None,
+            "desired_quote": parsed.get("desired_quote") if parsed else None,
+            "reasoning": parsed.get("reasoning") if parsed else None
+        }
+        results.append(registro)
+        # Salvamento em lote
+        save_batches(results, BATCH_SIZE, BATCH_SAVE_PREFIX)
+
+    # Salva o restante ao final
+    if len(results) % BATCH_SIZE != 0:
+        df_final = pd.DataFrame(results)
+        save_path = f"{BATCH_SAVE_PREFIX}_final.xlsx"
+        df_final.to_excel(save_path, index=False)
+        logging.info(f"Batch final salvo: {save_path}")
+
+    # Também salva tudo junto no output principal
+    pd.DataFrame(results).to_excel(OUTPUT_PATH, index=False)
+    logging.info(f"Arquivo completo salvo: {OUTPUT_PATH}")
+
+
+# ----------- Execução principal -----------
 if __name__ == "__main__":
-    main()
+    # Exemplo: processar um arquivo input específico
+    input_file = os.path.join(INPUT_DIR, "Job_postings_input.xlsx")
+    process_job_postings(input_file)
