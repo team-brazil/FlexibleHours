@@ -16,7 +16,7 @@ NUM_PREDICT = 200
 MAX_RETRIES = 2
 RETRY_SLEEP = 3
 
-BATCH_SIZE = 20
+BATCH_SIZE = 50
 BATCH_SAVE_PREFIX = "../output/results/batch_temp"
 
 logging.basicConfig(
@@ -56,26 +56,48 @@ def condense_description(description, window=3, min_length=2000):
 # ----------- PROMPT JSON REFINADO ------------
 def build_flexibility_prompt(description):
     return f"""
-You are an expert HR analyst. Analyze the job description below. Respond ONLY in this JSON format:
-{{
-  "undesired_flexibility": "YES" or "NO",
-  "undesired_quote": "exact quote or 'N/A'",
-  "desired_flexibility": "YES" or "NO",
-  "desired_quote": "exact quote or 'N/A'",
-  "reasoning": "Your step-by-step reasoning, max 400 characters"
-}}
-
-Rules:
-- "undesired_flexibility" is "YES" if there is any sign the employer can impose schedule changes, unpredictable shifts, "as needed", "PRN", "weekend availability", etc.
-- "desired_flexibility" is "YES" if the employee can control when they work, like "set your own schedule", "work from anywhere".
-- Only use direct quotes from the description in the quote fields, or 'N/A' if none found.
-- If both apply, both YES with their quotes.
-- Your reasoning must be concise and less than 400 characters.
-- Do NOT output anything outside the JSON.
-
-Job Description:
-{description}
-"""
+    Analyze job descriptions to detect:
+    - "undesired flexibility" (frequent unpredictable schedule/shift changes, on-call, instability),
+    - "desired flexibility" (benefits like flexible schedule, remote work, autonomy).
+    
+    Instructions:
+    - For each category, reply 1 (YES) or 0 (NO).
+    - Provide the supporting quote from the description or leave empty.
+    - Give a brief reasoning for each answer.
+    - Never set both as 1 for the same posting.
+    - Respond in this JSON (with double curly braces):
+    
+    {{
+      "undesired_flexibility": 1 or 0,
+      "undesired_quote": "...",
+      "undesired_reasoning": "...",
+      "desired_flexibility": 1 or 0,
+      "desired_quote": "...",
+      "desired_reasoning": "..."
+    }}
+    
+    Examples:
+    
+    Job post: "Schedules may change every week, on-call required."
+    {{
+      "undesired_flexibility": 1,
+      "undesired_quote": "Schedules may change every week, on-call required.",
+      "undesired_reasoning": "Mentions unpredictable schedule and on-call.",
+      "desired_flexibility": 0,
+      "desired_quote": "",
+      "desired_reasoning": "No mention of positive flexibility."
+    }}
+    
+    Job post: "Flexible schedule and remote work available."
+    {{
+      "undesired_flexibility": 0,
+      "undesired_quote": "",
+      "undesired_reasoning": "No instability in the schedule.",
+      "desired_flexibility": 1,
+      "desired_quote": "Flexible schedule and remote work available.",
+      "desired_reasoning": "Offers flexibility as a benefit."
+    }}
+    """
 
 
 # ----------- Função para chamada à API OLLAMA -----------
@@ -169,5 +191,5 @@ def process_job_postings(input_path):
 # ----------- Execução principal -----------
 if __name__ == "__main__":
     # Exemplo: processar um arquivo input específico
-    input_file = os.path.join(INPUT_DIR, "us_postings_sample.xlsx")
+    input_file = os.path.join(INPUT_DIR, "wrong_classificated_undesired_flexibility.xlsx")
     process_job_postings(input_file)
