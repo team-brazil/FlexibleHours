@@ -52,42 +52,25 @@ def condense_description(description, window=3, min_length=2000):
 # ----------- PROMPT ------------
 def build_flexibility_prompt(description):
     return f"""
-    You are an expert HR analyst. Your task is to identify whether there are **signs of undesirable work schedule flexibility** in a job description.
-
-    ## What counts as UNDESIRABLE FLEXIBILITY?
-    This refers to any situation where the employer may impose or change the employee's working hours based on business needs, often without employee control. Signs include (but are not limited to):
-    - Employer requiring rotating or variable shifts
-    - Schedule subject to change
-    - On-call availability or “as needed” work
-    - Open availability, especially without fixed schedule
-    - Working nights, weekends, holidays as required
-    - Shifts that vary by week or are not pre-defined
+    You are an expert HR analyst. Analyze the job description below. Respond ONLY in this JSON format:
+    {
+        "undesired_flexibility": "YES" or "NO",
+        "undesired_quote": "exact quote or 'N/A'",
+        "desired_flexibility": "YES" or "NO",
+        "desired_quote": "exact quote or 'N/A'",
+        "reasoning": "Your step-by-step reasoning, max 400 characters"
+    }
     
-    ⚠️ Even subtle phrases like "must be flexible", "schedule may vary", "subject to rotation", or "available when needed" often indicate undesirable flexibility.
-    
-    ## What does NOT count?
-    - Fixed shifts (e.g., Monday to Friday, 9–5)
-    - Clearly stated, predictable rotating shifts
-    - Flexibility controlled by the employee (e.g., "set your own schedule")
-    
-    ## YOUR TASK:
-    Return **ONLY ONE WORD**: 
-    - `undesirable` if there are any possible signs (even vague or implicit) of undesirable flexibility
-    - `not_undesirable` if the schedule seems fixed, employee-controlled, or not mentioned
-
-    When in doubt, lean toward classifying as `undesirable`.
+    Rules:
+    - "undesired_flexibility" is "YES" if there is any sign the employer can impose schedule changes, unpredictable shifts, "as needed", "PRN", "weekend availability", etc.
+    - "desired_flexibility" is "YES" if the employee can control when they work, like "set your own schedule", "work from anywhere".
+    - Only use direct quotes from the description in the quote fields, or 'N/A' if none found.
+    - If both apply, both YES with their quotes.
+    - Your reasoning must be concise and less than 400 characters.
+    - Do NOT output anything outside the JSON.
     
     Job Description:
     {description}
-    
-    Respond ONLY in this JSON format:
-    {{
-      "undesired_flexibility": "YES or NO",
-      "undesired_quote": "exact quote or 'N/A'",
-      "desired_flexibility": "YES or NO",
-      "desired_quote": "exact quote or 'N/A'",
-      "reasoning": "your full step-by-step reasoning, as a single string"
-    }}
     """
 
 
@@ -119,7 +102,7 @@ def evaluate_hour_flexibility_local(description, ollama_url=OLLAMA_URL):
                 undesired_quote = model_output.get("undesired_quote", "")
                 desired_flag = 1 if model_output.get("desired_flexibility", "NO") == "YES" else 0
                 desired_quote = model_output.get("desired_quote", "")
-                # reasoning = model_output.get("reasoning", "")
+                reasoning = model_output.get("reasoning", "")
 
             # STRICT: Se ambos YES, prioriza o desejável
                 if undesired_flag and desired_flag:
@@ -176,7 +159,7 @@ def evaluate_hour_flexibility_local(description, ollama_url=OLLAMA_URL):
                 if desired_flag == 0:
                     desired_quote = ""
 
-                return undesired_flag, undesired_quote, desired_flag, desired_quote
+                return undesired_flag, undesired_quote, desired_flag, desired_quote, reasoning
 
         except Exception as exc:
             logging.error(f"Ollama attempt {attempt} failed: {exc}")
@@ -275,7 +258,7 @@ def main():
     final_cols = [
         "Title", "Body",
         "Undesired_flexibility_dummy", "quote_body_undesired",
-        "Desired_flexibility_dummy", "quote_body_desired"
+        "Desired_flexibility_dummy", "quote_body_desired", "reasoning"
     ]
     save_with_coloring(df[final_cols], OUTPUT_PATH)
     logging.info("Processing completed.")
