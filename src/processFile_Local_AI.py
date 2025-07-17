@@ -263,6 +263,13 @@ def ollama_warmup():
         logging.warning(f"Warm-up failed: {e}")
 
 
+def keep_ollama_alive(interval_minutes=30):
+    while True:
+        time.sleep(interval_minutes * 60)
+        _ = call_ollama_api("Respond ONLY with OK.", temperature)
+        logging.info("Keep-alive sent to Ollama.")
+
+
 # ----------- MAIN EXECUTION -----------
 if __name__ == "__main__":
     clear_results_folder()
