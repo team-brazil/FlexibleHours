@@ -17,7 +17,7 @@ OLLAMA_URL = "http://localhost:11434/api/generate"
 MODEL_NAME = "llama3:8b"
 OUTPUT_PATH = f"../output/results"
 FINAL_FILE_PATH = f"{OUTPUT_PATH}/Job_postings_processed_{MODEL_NAME}.xlsx"
-temperature = 0.0
+temperature = 0
 NUM_PREDICT = 200
 MAX_RETRIES = 2
 RETRY_SLEEP = 3
@@ -253,9 +253,20 @@ def process_job_postings(input_path):
     color_excel(FINAL_FILE_PATH, col="undesired_flexibility")
 
 
+def ollama_warmup():
+    logging.info("Warming up the model with a dummy request...")
+    dummy_prompt = "Respond ONLY with OK."
+    try:
+        _ = call_ollama_api(dummy_prompt, temperature)
+        logging.info("Ollama model is warm and ready!")
+    except Exception as e:
+        logging.warning(f"Warm-up failed: {e}")
+
+
 # ----------- MAIN EXECUTION -----------
 if __name__ == "__main__":
     clear_results_folder()
+    ollama_warmup()
     input_file = os.path.join(INPUT_DIR_NAME_FILE)
     process_job_postings(input_file)
     logging.info(f"Log file saved at: {LOG_PATH}")
