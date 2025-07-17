@@ -206,7 +206,7 @@ def process_job_postings(input_path):
     df = pd.read_excel(input_path)
     results = []
     for idx, row in tqdm(df.iterrows(), total=len(df)):
-        desc = row.get("Body") or row.get("body") or ""
+        desc = row.get("BODY")
         short_desc = condense_description(desc)
         prompt = build_flexibility_prompt(short_desc)
         response = call_ollama_api(prompt)
@@ -226,7 +226,7 @@ def process_job_postings(input_path):
             reasoning = "PARSING ERROR"
 
         record = {
-            "Title": row.get("Title", ""),
+            "Title": row.get("TITLE_NAME", ""),
             "Body": desc,
             "llama_raw_response": response,
             "undesired_flexibility": undesired_val,
