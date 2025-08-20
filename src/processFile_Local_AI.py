@@ -16,6 +16,7 @@ INPUT_DIR_NAME_FILE = "../input/us_postings_sample.xlsx"
 OLLAMA_URL = "http://localhost:11434/api/generate"
 MODEL_NAME = "llama3:8b"
 OUTPUT_PATH = f"../output/results"
+LOG_PATH = "../logs"
 FINAL_FILE_PATH = f"{OUTPUT_PATH}/Job_postings_processed_{MODEL_NAME}.xlsx"
 temperature = 0
 NUM_PREDICT = 200
@@ -24,14 +25,15 @@ RETRY_SLEEP = 3
 BATCH_SIZE = 20   # Save every N records
 BATCH_SAVE_PREFIX = f"{OUTPUT_PATH}/batch_temp"
 os.makedirs(OUTPUT_PATH, exist_ok=True)
+os.makedirs(LOG_PATH, exist_ok=True)
 
-LOG_PATH = os.path.join(OUTPUT_PATH, f"process_log_{datetime.now().strftime('%Y%m%d_%H%M%S')}.txt")
+LOG_FILE = os.path.join(LOG_PATH, f"process_log_{datetime.now().strftime('%Y%m%d_%H%M%S')}.log")
 
 logging.basicConfig(
     level=logging.INFO,
     format="%(asctime)s - %(levelname)s - %(message)s",
     handlers=[
-        logging.FileHandler(LOG_PATH),
+        logging.FileHandler(LOG_FILE),
         logging.StreamHandler()
     ]
 )
@@ -69,29 +71,60 @@ def condense_description(description, window=3, min_length=2000):
 # ----------- IMPROVED JSON PROMPT ------------
 def build_flexibility_prompt(description):
     return f"""
-You are an expert HR analyst. Analyze the job description below and respond ONLY in this exact JSON format (no extra text, no comments):
+You are an expert HR analyst specializing in evaluating job posting flexibility requirements. Your task is to analyze the job description and classify the flexibility aspects.
 
+RESPONSE FORMAT:
+Respond ONLY in the following exact JSON format:
 {{
-    "undesired_flexibility": "YES" or "NO",
+  "undesired_flexibility": "YES" or "NO",
   "undesired_quote": "exact quote or 'N/A'",
   "desired_flexibility": "YES" or "NO",
   "desired_quote": "exact quote or 'N/A'",
   "reasoning": "Your step-by-step reasoning, maximum 200 characters"
 }}
 
-Instructions:
+CLASSIFICATION CRITERIA:
 
-- Mark "undesired_flexibility" as "YES" **only if** there is a direct phrase in the text proving that the employer can change, rotate, or unpredictably assign work hours (such as: "schedule may vary", "rotating shifts", "on-call required", "as needed", "PRN", "must be available for different shifts", "subject to change", "open availability required", "weekend/holiday work required").
-- The **undesired_quote** must be the exact phrase from the text that proves unpredictable or employer-driven variable schedule. DO NOT use a quote that does not clearly justify the label.
-- If there is no such phrase, mark "undesired_flexibility" as "NO" and set the quote to "N/A".
-- "Weekend coverage" or "Night shift" with fixed hours is NOT undesirable flexibility. Do NOT mark as undesirable unless there is evidence of variable or unpredictable schedule.
-- Mark "desired_flexibility" as "YES" only if the employee can clearly choose when to work, and quote the exact phrase.
-- Use only direct quotes for quote fields, or "N/A" if nothing applies.
-- Do NOT write anything outside the JSON. Do NOT use single quotes in the JSON.
+Undesired Flexibility:
+- Mark as "YES" ONLY if there is a direct phrase proving the employer can unpredictably change work hours
+- Examples include: "schedule may vary", "rotating shifts", "on-call required", "as needed", "PRN", "must be available for different shifts", "subject to change", "open availability required", "weekend/holiday work required"
+- Fixed schedules like "weekend coverage" or "night shift" are NOT undesired flexibility
+- The quote must be the exact phrase that justifies the classification
+
+Desired Flexibility:
+- Mark as "YES" ONLY if the employee can clearly choose when to work
+- Examples include: "flexible schedule", "choose your hours", "work when you want", "set your own schedule"
+- The quote must be the exact phrase that justifies the classification
+
+Instructions:
+1. Read the job description carefully
+2. Identify phrases related to work schedule flexibility
+3. Classify according to the criteria above
+4. Provide exact quotes to support your classifications
+5. Explain your reasoning step-by-step
+6. Respond ONLY in the specified JSON format
+
+EXAMPLE RESPONSES:
+Example 1:
+{{
+  "undesired_flexibility": "YES",
+  "undesired_quote": "Schedule may vary based on business needs",
+  "desired_flexibility": "NO",
+  "desired_quote": "N/A",
+  "reasoning": "Found phrase indicating unpredictable schedule changes"
+}}
+
+Example 2:
+{{
+  "undesired_flexibility": "NO",
+  "undesired_quote": "N/A",
+  "desired_flexibility": "YES",
+  "desired_quote": "Flexible work schedule available",
+  "reasoning": "Employee can choose their work hours"
+}}
 
 Job Description:
 {description}
-
 """
 
 
@@ -105,7 +138,10 @@ def call_ollama_api(prompt, max_retries=MAX_RETRIES, retry_sleep=RETRY_SLEEP):
                     "model": MODEL_NAME,
                     "prompt": prompt,
                     "temperature": temperature,
-                    "stream": False
+                    "stream": False,
+                    "repeat_penalty": 1.2,  # Helps reduce repetition
+                    "top_k": 50,  # Limits token selection for more focused output
+                    "top_p": 0.9  # Nucleus sampling for better quality
                 },
                 timeout=120
             )
@@ -134,6 +170,8 @@ def safe_parse_json(llm_output):
         except json.JSONDecodeError:
             # Fallback: try to fix common issues
             json_str = json_str.replace("'", '"')
+            # Fix trailing commas
+            json_str = re.sub(r',(\s*[}\]])', r'\1', json_str)
             try:
                 return json.loads(json_str)
             except Exception:
@@ -141,6 +179,26 @@ def safe_parse_json(llm_output):
     logging.warning(f"Could not parse JSON:\n{llm_output}")
     return None
 
+# --------- RESPONSE VALITADION ---------
+
+def validate_response(parsed_response):
+    """
+    Validate that the response has the expected structure and values.
+    """
+    if not parsed_response:
+        return False
+    
+    # Check required keys
+    required_keys = ["undesired_flexibility", "undesired_quote", "desired_flexibility", "desired_quote", "reasoning"]
+    if not all(key in parsed_response for key in required_keys):
+        return False
+    
+    # Check that flexibility values are either "YES" or "NO"
+    flexibility_values = [parsed_response["undesired_flexibility"], parsed_response["desired_flexibility"]]
+    if not all(val in ["YES", "NO"] for val in flexibility_values):
+        return False
+    
+    return True
 
 # ----------- YES/NO TO DUMMY -----------
 def yesno_to_dummy(val):
@@ -209,8 +267,12 @@ def process_job_postings(input_path):
         desc = row.get("BODY")
         short_desc = condense_description(desc)
         prompt = build_flexibility_prompt(short_desc)
-        response = call_ollama_api(prompt)
-        parsed = safe_parse_json(response) if response else None
+        
+        validated = False
+        while not validated:
+            response = call_ollama_api(prompt)     
+            parsed = safe_parse_json(response) if response else None
+            validated = validate_response(parsed)
 
         if parsed:
             undesired_val = yesno_to_dummy(parsed.get("undesired_flexibility"))
@@ -276,5 +338,5 @@ if __name__ == "__main__":
     ollama_warmup()
     input_file = os.path.join(INPUT_DIR_NAME_FILE)
     process_job_postings(input_file)
-    logging.info(f"Log file saved at: {LOG_PATH}")
-    print(f"Log file saved at: {LOG_PATH}")
+    logging.info(f"Log file saved at: {LOG_FILE}")
+    print(f"Log file saved at: {LOG_FILE}")
