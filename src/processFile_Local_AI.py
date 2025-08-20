@@ -82,7 +82,7 @@ You are an expert HR analyst. Analyze the job description below and respond ONLY
 Instructions:
 
 - Mark "undesired_flexibility" as "YES" **only if** there is a direct phrase in the text proving that the employer can change, rotate, or unpredictably assign work hours (such as: "schedule may vary", "rotating shifts", "on-call required", "as needed", "PRN", "must be available for different shifts", "subject to change", "open availability required", "weekend/holiday work required").
-- The **undesired_quote** must be the exact phrase from the text that proves unpredictable or employer-driven variable schedule. DO NOT use a quote that does not clearly justify the label.
+- The **undesired_quote** must be the exact phrase from the text that proves an unpredictable or employer-driven variable schedule. DO NOT use a quote that does not clearly justify the label.
 - If there is no such phrase, mark "undesired_flexibility" as "NO" and set the quote to "N/A".
 - "Weekend coverage" or "Night shift" with fixed hours is NOT undesirable flexibility. Do NOT mark as undesirable unless there is evidence of variable or unpredictable schedule.
 - Mark "desired_flexibility" as "YES" only if the employee can clearly choose when to work, and quote the exact phrase.
