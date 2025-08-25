@@ -18,7 +18,7 @@ SCRIPT_DIR = os.path.dirname(os.path.abspath(__file__))
 # Construir caminhos relativos ao diretório do script
 INPUT_DIR_NAME_FILE = os.path.join(SCRIPT_DIR, "..", "input", "us_postings_sample.xlsx")
 OLLAMA_URL = "http://localhost:11434/api/generate"
-MODEL_NAME = "llama3:8b"
+MODEL_NAME = "qwen3:8b"
 OUTPUT_PATH = os.path.join(SCRIPT_DIR, "..", "output", "results")
 LOG_PATH = os.path.join(SCRIPT_DIR, "..", "logs")
 FINAL_FILE_PATH = os.path.join(OUTPUT_PATH, f"Job_postings_processed_{MODEL_NAME}.xlsx")
