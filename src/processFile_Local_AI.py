@@ -12,18 +12,22 @@ from openpyxl.styles import PatternFill
 
 
 # === CONFIGURATION ===
-INPUT_DIR_NAME_FILE = "../input/us_postings_sample.xlsx"
+# Obter o diretório do script atual
+SCRIPT_DIR = os.path.dirname(os.path.abspath(__file__))
+
+# Construir caminhos relativos ao diretório do script
+INPUT_DIR_NAME_FILE = os.path.join(SCRIPT_DIR, "..", "input", "us_postings_sample.xlsx")
 OLLAMA_URL = "http://localhost:11434/api/generate"
 MODEL_NAME = "llama3:8b"
-OUTPUT_PATH = f"../output/results"
-LOG_PATH = "../logs"
-FINAL_FILE_PATH = f"{OUTPUT_PATH}/Job_postings_processed_{MODEL_NAME}.xlsx"
+OUTPUT_PATH = os.path.join(SCRIPT_DIR, "..", "output", "results")
+LOG_PATH = os.path.join(SCRIPT_DIR, "..", "logs")
+FINAL_FILE_PATH = os.path.join(OUTPUT_PATH, f"Job_postings_processed_{MODEL_NAME}.xlsx")
 temperature = 0
 NUM_PREDICT = 200
 MAX_RETRIES = 2
 RETRY_SLEEP = 3
 BATCH_SIZE = 20   # Save every N records
-BATCH_SAVE_PREFIX = f"{OUTPUT_PATH}/batch_temp"
+BATCH_SAVE_PREFIX = os.path.join(OUTPUT_PATH, "batch_temp")
 os.makedirs(OUTPUT_PATH, exist_ok=True)
 os.makedirs(LOG_PATH, exist_ok=True)
 
@@ -212,7 +216,7 @@ def yesno_to_dummy(val):
     return 0
 
 
-def clear_results_folder(path=f"{OUTPUT_PATH}", pattern="*.xlsx"):
+def clear_results_folder(path=OUTPUT_PATH, pattern="*.xlsx"):
     files = glob.glob(os.path.join(path, pattern))
     for f in files:
         try:
