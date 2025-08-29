@@ -16,9 +16,9 @@ from openpyxl.styles import PatternFill
 SCRIPT_DIR = os.path.dirname(os.path.abspath(__file__))
 
 # Construir caminhos relativos ao diretório do script
-INPUT_DIR_NAME_FILE = os.path.join(SCRIPT_DIR, "..", "input", "us_postings_sample.xlsx")
+INPUT_DIR_NAME_FILE = os.path.join(SCRIPT_DIR, "..", "input", "1000_unit_lightcast_sample.csv")
 OLLAMA_URL = "http://localhost:11434/api/generate"
-MODEL_NAME = "qwen3:8b"
+MODEL_NAME = "qwen3:4b"
 OUTPUT_PATH = os.path.join(SCRIPT_DIR, "..", "output", "results")
 LOG_PATH = os.path.join(SCRIPT_DIR, "..", "logs")
 FINAL_FILE_PATH = os.path.join(OUTPUT_PATH, f"Job_postings_processed_{MODEL_NAME}.xlsx")
@@ -265,7 +265,17 @@ def color_excel(path, col="undesired_flexibility"):
 
 # ----------- MAIN PIPELINE -----------
 def process_job_postings(input_path):
-    df = pd.read_excel(input_path)
+    
+    if input_path.endswith(".xlsx"):
+        df = pd.read_excel(input_path)
+    elif input_path.endswith(".csv"):
+        df = pd.read_csv(input_path)
+    else:
+        logging.error("Invalid file or filetype")
+        return
+    
+    
+    df.columns = [column.upper() for column in df.columns]
     results = []
     for idx, row in tqdm(df.iterrows(), total=len(df)):
         desc = row.get("BODY")
