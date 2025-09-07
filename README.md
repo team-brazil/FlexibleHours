@@ -27,23 +27,24 @@ This project analyzes job postings to identify unwanted flexibility requirements
 ## Installation
 
 1. Clone the repository:
+
    ```
    git clone <repository-url>
    cd FlexibleHours
    ```
-
 2. Create a virtual environment and activate it:
+
    ```
    python3 -m venv .venv
    source .venv/bin/activate  # On Windows: .venv\Scripts\activate
    ```
-
 3. Install dependencies:
+
    ```
    pip install -r requirements.txt
    ```
-
 4. Install Ollama and download the required model:
+
    ```
    # Follow instructions at https://ollama.ai to install Ollama
    ollama pull qwen3:8b
@@ -52,16 +53,18 @@ This project analyzes job postings to identify unwanted flexibility requirements
 ## Usage
 
 1. Make sure Ollama is running:
+
    ```
    ollama serve
    ```
-
 2. Run the main script:
+
    ```
    ./run_process.sh
    ```
 
    Or directly with Python:
+
    ```
    python src/processFile_Local_AI.py
    ```
@@ -105,6 +108,7 @@ To run tests with coverage collection, use:
 ```
 
 This command will:
+
 1. Run tests with coverage collection
 2. Generate a text report in the terminal
 3. Generate an HTML report in the `htmlcov/` directory
@@ -152,24 +156,6 @@ The test script includes:
 3. **Resume Tests**: Verifies the processing resume functionality
 4. **Mocks**: Uses mocks to simulate Ollama API calls
 
-## Contributing
-
-1. Fork the project
-2. Create a branch for your feature (`git checkout -b feature/AmazingFeature`)
-3. Commit your changes (`git commit -m 'Add some AmazingFeature'`)
-4. Push to the branch (`git push origin feature/AmazingFeature`)
-5. Open a Pull Request
-
 ## License
 
 Distributed under the MIT license. See `LICENSE` for more information.
-
-## Contact
-
-Your Name - your.email@example.com
-
-Project Link: [https://github.com/your-username/FlexibleHours](https://github.com/your-username/FlexibleHours)
-
-## Versão em Português
-
-Para a versão em português deste README, veja [README_pt.md](README_pt.md).

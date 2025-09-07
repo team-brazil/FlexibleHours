@@ -73,7 +73,3 @@ Tests use mocks to simulate Ollama API calls and isolate test units. This allows
 ## Contributing to Tests
 
 When adding new features to the project, make sure to include appropriate tests covering the new use cases. Follow the existing pattern in the current tests.
-
-## Versão em Português
-
-Para a versão em português deste README, veja [README_pt.md](README_pt.md).
