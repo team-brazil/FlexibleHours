@@ -1,0 +1,6 @@
+pandas
+openpyxl
+httpx
+tqdm
+pytest
+pytest-cov
