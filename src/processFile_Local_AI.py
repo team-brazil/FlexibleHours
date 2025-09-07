@@ -414,12 +414,17 @@ def process_job_postings(input_path):
     # Save remaining records at the end
     if len(results) % BATCH_SIZE != 0:
         df_final = pd.DataFrame(results)
+        # Remove row index from Title in final batch output
+        df_final["Title"] = df_final["Title"].str.replace(r" \(Row_\d+\)", "", regex=True)
         save_path = f"{BATCH_SAVE_PREFIX}_final.xlsx"
         df_final.to_excel(save_path, index=False)
         logging.info(f"Final batch saved: {save_path}")
 
     # Save the full output
-    pd.DataFrame(results).to_excel(FINAL_FILE_PATH, index=False)
+    df_final = pd.DataFrame(results)
+    # Remove row index from Title in final output
+    df_final["Title"] = df_final["Title"].str.replace(r" \(Row_\d+\)", "", regex=True)
+    df_final.to_excel(FINAL_FILE_PATH, index=False)
     logging.info(f"Full file saved: {FINAL_FILE_PATH}")
 
     # Color the 'undesired_flexibility' column in the final Excel file
