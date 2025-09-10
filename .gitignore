@@ -2,3 +2,12 @@
 .idea
 output
 input/test
+logs/
+*.log
+.venv
+__pycache__
+.coverage
+htmlcov/
+.pytest_cache/
+*.cover
+coverage.xml

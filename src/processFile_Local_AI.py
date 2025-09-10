@@ -12,27 +12,33 @@ from openpyxl.styles import PatternFill
 
 
 # === CONFIGURATION ===
-INPUT_DIR_NAME_FILE = "../input/us_postings_sample.xlsx"
+# Obter o diretório do script atual
+SCRIPT_DIR = os.path.dirname(os.path.abspath(__file__))
+
+# Construir caminhos relativos ao diretório do script
+INPUT_DIR_NAME_FILE = os.path.join(SCRIPT_DIR, "..", "input", "1000_unit_lightcast_sample.csv")
 OLLAMA_URL = "http://localhost:11434/api/generate"
-MODEL_NAME = "llama3:8b"
-OUTPUT_PATH = f"../output/results"
-FINAL_FILE_PATH = f"{OUTPUT_PATH}/Job_postings_processed_{MODEL_NAME}.xlsx"
+MODEL_NAME = "qwen3:8b"
+OUTPUT_PATH = os.path.join(SCRIPT_DIR, "..", "output", "results")
+LOG_PATH = os.path.join(SCRIPT_DIR, "..", "logs")
+FINAL_FILE_PATH = os.path.join(OUTPUT_PATH, f"Job_postings_processed_{MODEL_NAME}.xlsx")
 temperature = 0
 NUM_PREDICT = 200
 MAX_RETRIES = 2
 RETRY_SLEEP = 3
 BATCH_SIZE = 20   # Save every N records
-BATCH_SAVE_PREFIX = f"{OUTPUT_PATH}/batch_temp"
+BATCH_SAVE_PREFIX = os.path.join(OUTPUT_PATH, "batch_temp")
 os.makedirs(OUTPUT_PATH, exist_ok=True)
+os.makedirs(LOG_PATH, exist_ok=True)
 
-LOG_PATH = os.path.join(OUTPUT_PATH, f"process_log_{datetime.now().strftime('%Y%m%d_%H%M%S')}.txt")
+LOG_FILE = os.path.join(LOG_PATH, f"process_log_{datetime.now().strftime('%Y%m%d_%H%M%S')}.log")
 
 logging.basicConfig(
     level=logging.INFO,
     format="%(asctime)s - %(levelname)s - %(message)s",
     handlers=[
-        logging.FileHandler(LOG_PATH),
-        logging.StreamHandler()
+        logging.FileHandler(LOG_FILE)
+        # Removido StreamHandler para que os logs não apareçam no terminal
     ]
 )
 
@@ -43,8 +49,8 @@ def condense_description(description, window=3, min_length=2000):
     Only condense text if it is really long.
     Keeps lines with keywords and surrounding context.
     """
-    if len(description) < min_length:
-        return description
+    if description is None or len(description) < min_length:
+        return description if description is not None else ""
 
     keywords = [
         "schedule", "flexible", "flexibility", "shift", "weekend", "weekends",
@@ -69,29 +75,61 @@ def condense_description(description, window=3, min_length=2000):
 # ----------- IMPROVED JSON PROMPT ------------
 def build_flexibility_prompt(description):
     return f"""
-You are an expert HR analyst. Analyze the job description below and respond ONLY in this exact JSON format (no extra text, no comments):
+You are an expert HR analyst specializing in evaluating job posting flexibility requirements. Your task is to analyze the job description and classify the flexibility aspects.
 
+RESPONSE FORMAT:
+Respond ONLY in the following exact JSON format:
 {{
-    "undesired_flexibility": "YES" or "NO",
+  "undesired_flexibility": "YES" or "NO",
   "undesired_quote": "exact quote or 'N/A'",
   "desired_flexibility": "YES" or "NO",
   "desired_quote": "exact quote or 'N/A'",
   "reasoning": "Your step-by-step reasoning, maximum 200 characters"
 }}
 
-Instructions:
+CLASSIFICATION CRITERIA:
 
-- Mark "undesired_flexibility" as "YES" **only if** there is a direct phrase in the text proving that the employer can change, rotate, or unpredictably assign work hours (such as: "schedule may vary", "rotating shifts", "on-call required", "as needed", "PRN", "must be available for different shifts", "subject to change", "open availability required", "weekend/holiday work required").
-- The **undesired_quote** must be the exact phrase from the text that proves an unpredictable or employer-driven variable schedule. DO NOT use a quote that does not clearly justify the label.
-- If there is no such phrase, mark "undesired_flexibility" as "NO" and set the quote to "N/A".
-- "Weekend coverage" or "Night shift" with fixed hours is NOT undesirable flexibility. Do NOT mark as undesirable unless there is evidence of variable or unpredictable schedule.
-- Mark "desired_flexibility" as "YES" only if the employee can clearly choose when to work, and quote the exact phrase.
-- Use only direct quotes for quote fields, or "N/A" if nothing applies.
-- Do NOT write anything outside the JSON. Do NOT use single quotes in the JSON.
+Undesired Flexibility:
+- Mark as "YES" ONLY if there is a direct phrase proving the employer can unpredictably change work hours
+- Examples include: "schedule may vary", "rotating shifts", "on-call required", "as needed", "PRN", "must be available for different shifts", "subject to change", "open availability required", "weekend/holiday work required"
+- Demanded flexible work schedule is considered undesired flexibility, as it is open to the employer deciding working hours, with words like "must" and "necessary" hinting at that. Examples include "must be available to work flexible schedule", "must have a flexible schedule", "flexible schedule needed", "necessary flexible schedule"
+- Fixed schedules like "weekend coverage" or "night shift" are NOT undesired flexibility
+- The quote must be the exact phrase that justifies the classification
+
+Desired Flexibility:
+- Mark as "YES" ONLY if the employee can clearly choose when to work
+- Examples include: "flexible schedule", "choose your hours", "work when you want", "set your own schedule"
+- The quote must be the exact phrase that justifies the classification
+
+Instructions:
+1. Read the job description carefully
+2. Identify phrases related to work schedule flexibility
+3. Classify according to the criteria above
+4. Provide exact quotes to support your classifications
+5. Explain your reasoning step-by-step
+6. Respond ONLY in the specified JSON format
+
+EXAMPLE RESPONSES:
+Example 1:
+{{
+  "undesired_flexibility": "YES",
+  "undesired_quote": "Schedule may vary based on business needs",
+  "desired_flexibility": "NO",
+  "desired_quote": "N/A",
+  "reasoning": "Found phrase indicating unpredictable schedule changes"
+}}
+
+Example 2:
+{{
+  "undesired_flexibility": "NO",
+  "undesired_quote": "N/A",
+  "desired_flexibility": "YES",
+  "desired_quote": "Flexible work schedule available",
+  "reasoning": "Employee can choose their work hours"
+}}
 
 Job Description:
 {description}
-
 """
 
 
@@ -105,7 +143,10 @@ def call_ollama_api(prompt, max_retries=MAX_RETRIES, retry_sleep=RETRY_SLEEP):
                     "model": MODEL_NAME,
                     "prompt": prompt,
                     "temperature": temperature,
-                    "stream": False
+                    "stream": False,
+                    "repeat_penalty": 1.2,  # Helps reduce repetition
+                    "top_k": 50,  # Limits token selection for more focused output
+                    "top_p": 0.9  # Nucleus sampling for better quality
                 },
                 timeout=120
             )
@@ -124,16 +165,26 @@ def safe_parse_json(llm_output):
     """
     Strip everything before first '{' and after last '}', and try to parse.
     """
+    if not llm_output:
+        logging.warning("Empty JSON input")
+        return None
+        
     import re
     match = re.search(r'(\{[\s\S]+\})', llm_output)
     if match:
         json_str = match.group(1)
+        # Verificar se é apenas chaves vazias
+        if json_str.strip() == "{}":
+            return {}
+            
         try:
             # Try parsing with double quotes
             return json.loads(json_str)
         except json.JSONDecodeError:
             # Fallback: try to fix common issues
             json_str = json_str.replace("'", '"')
+            # Fix trailing commas
+            json_str = re.sub(r',(\s*[}\]])', r'\1', json_str)
             try:
                 return json.loads(json_str)
             except Exception:
@@ -141,6 +192,26 @@ def safe_parse_json(llm_output):
     logging.warning(f"Could not parse JSON:\n{llm_output}")
     return None
 
+# --------- RESPONSE VALITADION ---------
+
+def validate_response(parsed_response):
+    """
+    Validate that the response has the expected structure and values.
+    """
+    if not parsed_response:
+        return False
+    
+    # Check required keys
+    required_keys = ["undesired_flexibility", "undesired_quote", "desired_flexibility", "desired_quote", "reasoning"]
+    if not all(key in parsed_response for key in required_keys):
+        return False
+    
+    # Check that flexibility values are either "YES" or "NO"
+    flexibility_values = [parsed_response["undesired_flexibility"], parsed_response["desired_flexibility"]]
+    if not all(val in ["YES", "NO"] for val in flexibility_values):
+        return False
+    
+    return True
 
 # ----------- YES/NO TO DUMMY -----------
 def yesno_to_dummy(val):
@@ -154,7 +225,7 @@ def yesno_to_dummy(val):
     return 0
 
 
-def clear_results_folder(path=f"{OUTPUT_PATH}", pattern="*.xlsx"):
+def clear_results_folder(path=OUTPUT_PATH, pattern="*.xlsx"):
     files = glob.glob(os.path.join(path, pattern))
     for f in files:
         try:
@@ -163,20 +234,68 @@ def clear_results_folder(path=f"{OUTPUT_PATH}", pattern="*.xlsx"):
             print(f"Could not remove {f}: {e}")
 
 
+def load_existing_batches(save_path_prefix):
+    """
+    Load existing batch files to resume processing.
+    Returns the list of processed results and the highest processed index.
+    """
+    # Find all batch files
+    batch_files = glob.glob(f"{save_path_prefix}_*.xlsx")
+    
+    # Sort by batch number
+    def extract_batch_number(filename):
+        try:
+            return int(filename.split('_')[-1].split('.')[0])
+        except:
+            return -1
+    
+    batch_files.sort(key=extract_batch_number)
+    
+    # Load only the last batch file, as it contains all processed records up to that point
+    results = []
+    last_processed_index = -1
+    
+    if batch_files:
+        # Get the last batch file (highest batch number)
+        last_batch_file = batch_files[-1]
+        try:
+            df = pd.read_excel(last_batch_file)
+            # Convert DataFrame to list of dictionaries
+            results = df.to_dict('records')
+            # The last processed index is the number of records in the last batch minus 1
+            last_processed_index = len(results) - 1
+            logging.info(f"Loaded {len(results)} existing records from {last_batch_file}, resuming from index {last_processed_index + 1}")
+        except Exception as e:
+            logging.warning(f"Could not load batch file {last_batch_file}: {e}")
+            results = []
+            last_processed_index = -1
+    
+    return results, last_processed_index
+
+
 # ----------- SAVE BATCHES -----------
 def save_batches(results, batch_size, save_path_prefix):
     if len(results) % batch_size == 0 and len(results) > 0:
         batch_number = len(results) // batch_size
         df = pd.DataFrame(results)
         save_path = f"{save_path_prefix}_{batch_number}.xlsx"
+        # Criar diretório se não existir
+        os.makedirs(os.path.dirname(save_path), exist_ok=True)
         df.to_excel(save_path, index=False)
         logging.info(f"Batch saved: {save_path}")
 
 
 # ----------- EXCEL HIGHLIGHTING FUNCTION -----------
 def color_excel(path, col="undesired_flexibility"):
-    wb = load_workbook(path)
-    ws = wb.active
+    try:
+        wb = load_workbook(path)
+        ws = wb.active
+    except FileNotFoundError:
+        print(f"File not found: {path}")
+        return
+    except Exception as e:
+        print(f"Error loading workbook: {e}")
+        return
     red = PatternFill(start_color="FFC7CE", end_color="FFC7CE", fill_type="solid")   # Red
     green = PatternFill(start_color="C6EFCE", end_color="C6EFCE", fill_type="solid") # Green
 
@@ -203,15 +322,65 @@ def color_excel(path, col="undesired_flexibility"):
 
 # ----------- MAIN PIPELINE -----------
 def process_job_postings(input_path):
-    df = pd.read_excel(input_path)
-    results = []
-    for idx, row in tqdm(df.iterrows(), total=len(df)):
+    # Criar diretórios de saída se não existirem
+    os.makedirs(OUTPUT_PATH, exist_ok=True)
+    os.makedirs(os.path.dirname(BATCH_SAVE_PREFIX), exist_ok=True)
+    
+    # Check if there are existing batch files to resume from
+    existing_results, last_processed_index = load_existing_batches(BATCH_SAVE_PREFIX)
+    
+    if existing_results:
+        logging.info(f"Resuming from existing batches. Last processed index: {last_processed_index}")
+        results = existing_results
+        resume_from = last_processed_index + 1
+    else:
+        logging.info("Starting fresh processing")
+        results = []
+        resume_from = 0
+    
+    if input_path.endswith(".xlsx"):
+        df = pd.read_excel(input_path)
+    elif input_path.endswith(".csv"):
+        df = pd.read_csv(input_path)
+    else:
+        logging.error("Invalid file or filetype")
+        return
+    
+    df.columns = [column.upper() for column in df.columns]
+    
+    # Process rows starting from resume_from index
+    pbar = tqdm(total=len(df), initial=0)
+    pbar.update(resume_from)  # Set initial position
+    
+    for idx, row in df.iterrows():
+        # Skip already processed rows
+        if idx < resume_from:
+            continue
+            
+        # Update progress bar description with current row index
+        # pbar.set_description(f"Processing row {idx}")
+        pbar.set_postfix({"Total": len(df)})
+            
+        # Log the row being processed
+        if idx % 10 == 0 or idx == resume_from:
+            logging.info(f"Processing row {idx}/{len(df)}")
+            
         desc = row.get("BODY")
         short_desc = condense_description(desc)
         prompt = build_flexibility_prompt(short_desc)
-        response = call_ollama_api(prompt)
-        parsed = safe_parse_json(response) if response else None
-
+        
+        logging.info(f"Calling Ollama API for row {idx}")
+        validated = False
+        while not validated:
+            response = call_ollama_api(prompt)
+            parsed = safe_parse_json(response) if response else None
+            validated = validate_response(parsed)
+            
+        logging.info(f"Finished processing row {idx}")
+        
+        # Update progress bar
+        pbar.update(1)
+        
         if parsed:
             undesired_val = yesno_to_dummy(parsed.get("undesired_flexibility"))
             desired_val = yesno_to_dummy(parsed.get("desired_flexibility"))
@@ -225,8 +394,10 @@ def process_job_postings(input_path):
             desired_quote = ""
             reasoning = "PARSING ERROR"
 
+        # Include original index in the title for tracking
+        title = row.get("TITLE_NAME", "")
         record = {
-            "Title": row.get("TITLE_NAME", ""),
+            "Title": f"{title} (Row_{idx})",
             "Body": desc,
             "llama_raw_response": response,
             "undesired_flexibility": undesired_val,
@@ -237,16 +408,23 @@ def process_job_postings(input_path):
         }
         results.append(record)
         save_batches(results, BATCH_SIZE, BATCH_SAVE_PREFIX)
+        
+    pbar.close()
 
     # Save remaining records at the end
     if len(results) % BATCH_SIZE != 0:
         df_final = pd.DataFrame(results)
+        # Remove row index from Title in final batch output
+        df_final["Title"] = df_final["Title"].str.replace(r" \(Row_\d+\)", "", regex=True)
         save_path = f"{BATCH_SAVE_PREFIX}_final.xlsx"
         df_final.to_excel(save_path, index=False)
         logging.info(f"Final batch saved: {save_path}")
 
     # Save the full output
-    pd.DataFrame(results).to_excel(FINAL_FILE_PATH, index=False)
+    df_final = pd.DataFrame(results)
+    # Remove row index from Title in final output
+    df_final["Title"] = df_final["Title"].str.replace(r" \(Row_\d+\)", "", regex=True)
+    df_final.to_excel(FINAL_FILE_PATH, index=False)
     logging.info(f"Full file saved: {FINAL_FILE_PATH}")
 
     # Color the 'undesired_flexibility' column in the final Excel file
@@ -272,9 +450,16 @@ def keep_ollama_alive(interval_minutes=30):
 
 # ----------- MAIN EXECUTION -----------
 if __name__ == "__main__":
-    clear_results_folder()
+    # Check if there are existing batch files before clearing
+    existing_batches = glob.glob(f"{BATCH_SAVE_PREFIX}_*.xlsx")
+    
+    if not existing_batches:
+        # Only clear results folder if there are no existing batches
+        clear_results_folder()
+    
     ollama_warmup()
     input_file = os.path.join(INPUT_DIR_NAME_FILE)
     process_job_postings(input_file)
-    logging.info(f"Log file saved at: {LOG_PATH}")
-    print(f"Log file saved at: {LOG_PATH}")
+    logging.info(f"Log file saved at: {LOG_FILE}")
+    print(f"Log file saved at: {LOG_FILE}")
+    clear_results_folder()

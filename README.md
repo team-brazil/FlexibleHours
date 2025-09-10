@@ -1,114 +1,161 @@
-# Job Posting Flexibility Analysis Project
+# FlexibleHours
 
-## 1. Overview
+Project for analyzing flexibility in job postings using local artificial intelligence.
 
-This project utilizes a local Large Language Model (LLM), Llama 3, to analyze job descriptions. The goal is to classify schedule flexibility into two main categories:
+## Description
 
-* **Undesirable Flexibility:** The schedule is controlled by the company to meet its needs (e.g., rotating shifts, "as needed" work, mandatory on-call).
-* **Desirable Flexibility:** The employee has autonomy to set their own work schedule.
+This project analyzes job postings to identify unwanted flexibility requirements (such as variable shifts, on-call duties, etc.) and desired flexibility (such as flexible hours chosen by the employee). It uses a local language model (Ollama) to process job descriptions.
 
-The system is designed to be robust, processing data in batches and ensuring that the results are auditable and easy to analyze.
+## Features
 
-## 2. Prerequisites
+- Processing of CSV and XLSX files containing job postings
+- Flexibility analysis using local AI (Ollama)
+- Job classification based on predefined criteria
+- Generation of reports in Excel format with conditional coloring
+- Resume processing functionality from interruption points
+- Batch saving to prevent data loss in case of interruption
 
-Before you begin, ensure you have the following software installed:
+## Requirements
 
-* **Python 3.8+**
-* **Ollama:** To run the LLM locally. Follow the installation instructions on the [official Ollama website](https://ollama.com/).
+- Python 3.6+
+- Ollama (with qwen3:8b model or similar)
+- Pandas
+- OpenPyXL
+- httpx
+- tqdm
 
-## 3. Environment Setup
+## Installation
 
-Follow these steps to set up the project environment on your local machine.
+1. Clone the repository:
 
-### a. Install the AI Model
+   ```
+   git clone <repository-url>
+   cd FlexibleHours
+   ```
+2. Create a virtual environment and activate it:
 
-After installing Ollama, open your terminal and run the following command to download the Llama 3 8B model used in this project:
+   ```
+   python3 -m venv .venv
+   source .venv/bin/activate  # On Windows: .venv\Scripts\activate
+   ```
+3. Install dependencies:
 
-```bash
-ollama pull llama3:8b
+   ```
+   pip install -r requirements.txt
+   ```
+4. Install Ollama and download the required model:
+
+   ```
+   # Follow instructions at https://ollama.ai to install Ollama
+   ollama pull qwen3:8b
+   ```
+
+## Usage
+
+1. Make sure Ollama is running:
+
+   ```
+   ollama serve
+   ```
+2. Run the main script:
+
+   ```
+   ./run_process.sh
+   ```
+
+   Or directly with Python:
+
+   ```
+   python src/processFile_Local_AI.py
+   ```
+
+## Project Structure
+
 ```
-
-### b. Clone the Repository (if applicable)
-
-If the project is in a git repository, clone it. Otherwise, just ensure you have the project folder.
-
-### c. Create a Virtual Environment
-
-It is a best practice to use a virtual environment to isolate project dependencies.
-
-```bash
-# Create the virtual environment
-python -m venv venv
-
-# Activate the environment (on macOS/Linux)
-source venv/bin/activate
-
-# Activate the environment (on Windows)
-.\venv\Scripts\activate
-```
-
-### d. Install Dependencies
-
-Create a file named `requirements.txt` in the project's root directory with the following content:
-
-```
-pandas
-openpyxl
-httpx
-tqdm
-```
-
-Then, install these dependencies using pip:
-
-```bash
-pip install -r requirements.txt
-```
-
-## 4. Folder Structure
-
-The project expects the following directory structure:
-
-```
-/flexibility-analysis-project
-|
+FlexibleHours/
+├── src/
+│   └── processFile_Local_AI.py     # Main script
 ├── input/
-│   └── us_postings_sample.xlsx  <-- PLACE YOUR INPUT FILE HERE
-|
+│   ├── 1000_unit_lightcast_sample.csv  # Sample file
+│   └── us_postings_sample.xlsx         # Sample file
 ├── output/
-│   └── results/                 <-- RESULTS WILL BE SAVED HERE
-|
-├── venv/
-├── processFile_Local_AI.py      <-- MAIN SCRIPT
-└── README.md
+│   └── results/                        # Processing results
+├── logs/                               # Log files
+├── tests/                              # Automated tests
+├── requirements.txt                    # Project dependencies
+├── requirements-dev.txt                # Development dependencies
+├── run_process.sh                      # Script to run processing
+├── run_tests.sh                        # Script to run tests
+└── README.md                           # This file
 ```
 
-## 5. How to Run the Analysis
+## Tests
 
-1.  **Place your data file:** Add the Excel file (`.xlsx`) you want to analyze into the `input/` folder. Ensure the filename matches the one configured in the `INPUT_DIR_NAME_FILE` variable inside the `processFile_Local_AI.py` script.
-2.  **Start the Ollama Service:** Make sure the Ollama application is running on your machine. The script needs it to communicate with the AI model.
-3.  **Run the script:** With your virtual environment activated, navigate to the project folder in your terminal and execute the main script:
+The project includes a comprehensive suite of automated tests. To run the tests:
 
-    ```bash
-    python processFile_Local_AI.py
-    ```
+```
+./run_tests.sh
+```
 
-4.  **Track the progress:** A progress bar will be displayed in the terminal. The script will save batch files (`batch_temp_*.xlsx`) and a log file (`process_log_*.txt`) in the `output/results/` folder.
+### Code Coverage
 
-## 6. Output
+The project is configured to generate code coverage reports. The coverage configuration is defined in the `.coveragerc` file.
 
-At the end of the process, you will find the following files in the `output/results/` folder:
+To run tests with coverage collection, use:
 
-* `Job_postings_processed_llama3:8b.xlsx`: The final, consolidated file with all results. The rows are color-coded for easy identification:
-    * **Red:** Classified as "Undesirable Flexibility".
-    * **Green:** Not classified as "Undesirable Flexibility".
-* `process_log_*.txt`: A detailed log file with information about the execution, including warnings and errors.
+```
+./run_tests.sh --coverage
+```
 
-## 7. Next Steps: Improving the Prompt
+This command will:
 
-The main task now is to refine the prompt sent to the AI to improve classification accuracy. The process is iterative:
+1. Run tests with coverage collection
+2. Generate a text report in the terminal
+3. Generate an HTML report in the `htmlcov/` directory
 
-1.  **Run the analysis** on a sample set.
-2.  **Manually review** the output Excel file, focusing on the `undesired_quote` and `reasoning` columns to understand the AI's decisions.
-3.  **Identify common errors:** Look for patterns in mistakes (e.g., false positives, false negatives, misinterpretations of certain terms).
-4.  **Adjust the prompt:** Modify the `build_flexibility_prompt` function in the `processFile_Local_AI.py` script. You can add clearer examples, refine definitions, or include explicit instructions to avoid the identified errors.
-5.  **Repeat the cycle** until the accuracy rate is satisfactory.
+Alternatively, you can use coverage commands directly:
+
+```
+coverage run -m pytest tests/
+coverage report
+coverage html
+```
+
+Coverage files (`.coverage`, `htmlcov/`) are not versioned and are included in `.gitignore`.
+
+For more information about tests, see [tests/README.md](tests/README.md).
+
+## Configuration
+
+The main settings are at the beginning of the `src/processFile_Local_AI.py` file:
+
+- `INPUT_DIR_NAME_FILE`: Path to the input file
+- `OLLAMA_URL`: Ollama server URL
+- `MODEL_NAME`: Name of the model to be used
+- `OUTPUT_PATH`: Output directory
+- `BATCH_SIZE`: Number of records per batch
+
+## Script Operation
+
+### Main Script (`src/processFile_Local_AI.py`)
+
+The main script performs the following operations:
+
+1. **File Processing**: Reads CSV or XLSX files containing job postings
+2. **Flexibility Analysis**: Uses the Ollama API to analyze job descriptions and classify them by flexibility
+3. **Processing Resume**: Allows resuming processing from the previous interruption point
+4. **Batch Saving**: Saves intermediate results in batches to prevent data loss
+5. **Report Generation**: Creates reports in Excel format with conditional coloring
+
+### Test Script (`tests/test_processFile_Local_AI.py`)
+
+The test script includes:
+
+1. **Unit Tests**: Tests all main functions of the script
+2. **Integration Tests**: Tests the complete job analysis process
+3. **Resume Tests**: Verifies the processing resume functionality
+4. **Mocks**: Uses mocks to simulate Ollama API calls
+
+## License
+
+Distributed under the MIT license. See `LICENSE` for more information.
