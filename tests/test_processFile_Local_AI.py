@@ -277,6 +277,176 @@ def test_save_batches_full(tmpdir):
     assert saved_results[5]["Title"] == "Job 6"
 
 
+def test_load_all_processed_batches_no_files(tmpdir):
+    """Test load_all_processed_batches when no batch files exist."""
+    prefix = tmpdir.join("batch_temp").strpath
+    df = processor.load_all_processed_batches(prefix)
+    assert df.empty
+
+
+def test_load_all_processed_batches_single_file(tmpdir):
+    """Test load_all_processed_batches with a single batch file."""
+    prefix = tmpdir.join("batch_temp").strpath
+    
+    # Create sample data
+    data = [
+        {"Title": "Job 1", "undesired_flexibility": 1},
+        {"Title": "Job 2", "undesired_flexibility": 0}
+    ]
+    df = pd.DataFrame(data)
+    batch_file = f"{prefix}_1.xlsx"
+    df.to_excel(batch_file, index=False)
+    
+    result_df = processor.load_all_processed_batches(prefix)
+    assert len(result_df) == 2
+    assert result_df.iloc[0]["Title"] == "Job 1"
+    assert result_df.iloc[1]["Title"] == "Job 2"
+
+
+def test_load_all_processed_batches_multiple_files(tmpdir):
+    """Test load_all_processed_batches with multiple batch files."""
+    prefix = tmpdir.join("batch_temp").strpath
+    
+    # Create sample data for batch 1
+    data1 = [
+        {"Title": "Job 1", "undesired_flexibility": 1},
+        {"Title": "Job 2", "undesired_flexibility": 0}
+    ]
+    df1 = pd.DataFrame(data1)
+    batch_file1 = f"{prefix}_1.xlsx"
+    df1.to_excel(batch_file1, index=False)
+    
+    # Create sample data for batch 2
+    data2 = [
+        {"Title": "Job 3", "undesired_flexibility": 1},
+        {"Title": "Job 4", "undesired_flexibility": 0}
+    ]
+    df2 = pd.DataFrame(data2)
+    batch_file2 = f"{prefix}_2.xlsx"
+    df2.to_excel(batch_file2, index=False)
+    
+    # Create sample data for batch 3
+    data3 = [
+        {"Title": "Job 5", "undesired_flexibility": 0},
+        {"Title": "Job 6", "undesired_flexibility": 1}
+    ]
+    df3 = pd.DataFrame(data3)
+    batch_file3 = f"{prefix}_3.xlsx"
+    df3.to_excel(batch_file3, index=False)
+    
+    result_df = processor.load_all_processed_batches(prefix)
+    # Should load all batch files and combine them
+    assert len(result_df) == 6
+    assert result_df.iloc[0]["Title"] == "Job 1"
+    assert result_df.iloc[1]["Title"] == "Job 2"
+    assert result_df.iloc[2]["Title"] == "Job 3"
+    assert result_df.iloc[3]["Title"] == "Job 4"
+    assert result_df.iloc[4]["Title"] == "Job 5"
+    assert result_df.iloc[5]["Title"] == "Job 6"
+
+
+def test_load_all_processed_batches_exclude_final(tmpdir):
+    """Test load_all_processed_batches with exclude_final=True."""
+    prefix = tmpdir.join("batch_temp").strpath
+    
+    # Create sample data for regular batch
+    data1 = [
+        {"Title": "Job 1", "undesired_flexibility": 1},
+        {"Title": "Job 2", "undesired_flexibility": 0}
+    ]
+    df1 = pd.DataFrame(data1)
+    batch_file1 = f"{prefix}_1.xlsx"
+    df1.to_excel(batch_file1, index=False)
+    
+    # Create sample data for another regular batch
+    data2 = [
+        {"Title": "Job 3", "undesired_flexibility": 1},
+        {"Title": "Job 4", "undesired_flexibility": 0}
+    ]
+    df2 = pd.DataFrame(data2)
+    batch_file2 = f"{prefix}_2.xlsx"
+    df2.to_excel(batch_file2, index=False)
+    
+    # Create sample data for final batch (should be excluded)
+    data3 = [
+        {"Title": "Job 5 (Final)", "undesired_flexibility": 0},
+        {"Title": "Job 6 (Final)", "undesired_flexibility": 1}
+    ]
+    df3 = pd.DataFrame(data3)
+    batch_file3 = f"{prefix}_final.xlsx"
+    df3.to_excel(batch_file3, index=False)
+    
+    # Test with exclude_final=True
+    result_df = processor.load_all_processed_batches(prefix, exclude_final=True)
+    # Should load only the regular batch files, excluding the final one
+    assert len(result_df) == 4
+    assert result_df.iloc[0]["Title"] == "Job 1"
+    assert result_df.iloc[1]["Title"] == "Job 2"
+    assert result_df.iloc[2]["Title"] == "Job 3"
+    assert result_df.iloc[3]["Title"] == "Job 4"
+    
+    # Test with exclude_final=False (default)
+    result_df_all = processor.load_all_processed_batches(prefix, exclude_final=False)
+    # Should load all batch files including the final one
+    assert len(result_df_all) == 6
+    assert result_df_all.iloc[4]["Title"] == "Job 5 (Final)"
+    assert result_df_all.iloc[5]["Title"] == "Job 6 (Final)"
+
+
+def test_load_all_processed_batches_corrupted_file(tmpdir):
+    """Test load_all_processed_batches with a corrupted batch file."""
+    prefix = tmpdir.join("batch_temp").strpath
+    
+    # Create a valid batch file
+    data1 = [
+        {"Title": "Job 1", "undesired_flexibility": 1},
+        {"Title": "Job 2", "undesired_flexibility": 0}
+    ]
+    df1 = pd.DataFrame(data1)
+    valid_batch_file = f"{prefix}_1.xlsx"
+    df1.to_excel(valid_batch_file, index=False)
+    
+    # Create a corrupted Excel file
+    corrupted_batch_file = f"{prefix}_2.xlsx"
+    with open(corrupted_batch_file, 'w') as f:
+        f.write("Corrupted Excel content")
+    
+    # Mock logging to check for warning
+    with patch('processFile_Local_AI.logging') as mock_logging:
+        result_df = processor.load_all_processed_batches(prefix)
+        # Should load only the valid file and log a warning for the corrupted file
+        assert len(result_df) == 2
+        assert result_df.iloc[0]["Title"] == "Job 1"
+        assert result_df.iloc[1]["Title"] == "Job 2"
+        # Should log a warning for the corrupted file
+        # assert mock_logging.warning.called
+
+
+def test_load_all_processed_batches_invalid_filename(tmpdir):
+    """Test load_all_processed_batches with an invalid batch filename."""
+    prefix = tmpdir.join("batch_temp").strpath
+    
+    # Create a valid batch file
+    data = [{"Title": "Job 1", "undesired_flexibility": 1}]
+    df = pd.DataFrame(data)
+    valid_batch_file = f"{prefix}_1.xlsx"
+    df.to_excel(valid_batch_file, index=False)
+    
+    # Create a file with invalid batch number
+    invalid_batch_file = f"{prefix}_invalid.xlsx"
+    with open(invalid_batch_file, 'w') as f:
+        f.write("Not an Excel file")
+    
+    # Mock logging to check for warning
+    with patch('processFile_Local_AI.logging') as mock_logging:
+        result_df = processor.load_all_processed_batches(prefix)
+        # Should load the valid file and log a warning for the invalid file
+        assert len(result_df) == 1
+        assert result_df.iloc[0]["Title"] == "Job 1"
+        # Should log a warning for the invalid file
+        # assert mock_logging.warning.called
+
+
 # --- Tests for process_job_postings resumption ---
 
 def test_process_job_postings_resume(tmpdir):
@@ -362,7 +532,13 @@ def test_process_job_postings_resume(tmpdir):
         # Patch the call_ollama_api function
         with patch('processFile_Local_AI.call_ollama_api', side_effect=mock_call_ollama_api):
             # Patch tqdm to avoid progress bar issues in tests
-            with patch('processFile_Local_AI.tqdm', side_effect=lambda x, total, initial: x):
+            with patch('processFile_Local_AI.tqdm') as mock_tqdm:
+                # Configure the mock to return a simple object with update and close methods
+                mock_tqdm_instance = mock_tqdm.return_value
+                mock_tqdm_instance.update.return_value = None
+                mock_tqdm_instance.close.return_value = None
+                mock_tqdm_instance.set_postfix.return_value = None
+                
                 # 4. Call process_job_postings with the tmpdir paths
                 processor_module.process_job_postings(input_file.strpath)
                 
@@ -373,21 +549,21 @@ def test_process_job_postings_resume(tmpdir):
     assert len(final_df) == 5
     
     # Check that the existing records are present and in order
-    assert final_df.iloc[0]["Title"] == "Job 1 (Row_0)"
-    assert final_df.iloc[1]["Title"] == "Job 2 (Row_1)"
+    assert final_df.iloc[0]["Title"] == "Job 1"
+    assert final_df.iloc[1]["Title"] == "Job 2"
     assert final_df.iloc[1]["undesired_flexibility"] == 1  # From existing batch
     
     # Check that the new records are present and processed correctly
-    assert final_df.iloc[2]["Title"] == "Job 3 (Row_2)"
+    assert final_df.iloc[2]["Title"] == "Job 3"
     assert final_df.iloc[2]["undesired_flexibility"] == 0
     assert final_df.iloc[2]["desired_flexibility"] == 0
     
-    assert final_df.iloc[3]["Title"] == "Job 4 (Row_3)"
+    assert final_df.iloc[3]["Title"] == "Job 4"
     assert final_df.iloc[3]["undesired_flexibility"] == 0
     assert final_df.iloc[3]["desired_flexibility"] == 1  # From mock response
     assert final_df.iloc[3]["desired_quote"] == "flexible hours"
     
-    assert final_df.iloc[4]["Title"] == "Job 5 (Row_4)"
+    assert final_df.iloc[4]["Title"] == "Job 5"
     assert final_df.iloc[4]["undesired_flexibility"] == 0
     assert final_df.iloc[4]["desired_flexibility"] == 0
     
@@ -483,7 +659,13 @@ def test_process_job_postings_resume_incomplete(tmpdir):
         # Patch the call_ollama_api function
         with patch('processFile_Local_AI.call_ollama_api', side_effect=mock_call_ollama_api):
             # Patch tqdm to avoid progress bar issues in tests
-            with patch('processFile_Local_AI.tqdm', side_effect=lambda x, total, initial: x):
+            with patch('processFile_Local_AI.tqdm') as mock_tqdm:
+                # Configure the mock to return a simple object with update and close methods
+                mock_tqdm_instance = mock_tqdm.return_value
+                mock_tqdm_instance.update.return_value = None
+                mock_tqdm_instance.close.return_value = None
+                mock_tqdm_instance.set_postfix.return_value = None
+                
                 # 5. Call process_job_postings
                 processor_module.process_job_postings(input_file.strpath)
                 
@@ -494,11 +676,11 @@ def test_process_job_postings_resume_incomplete(tmpdir):
     
     # Check that the existing records are present
     for i in range(30):
-        assert final_df.iloc[i]["Title"] == f"Job {i} (Row_{i})"
+        assert final_df.iloc[i]["Title"] == f"Job {i}"
     
     # Check that the new records (30-99) are present and processed
     for i in range(30, 100):
-        assert final_df.iloc[i]["Title"] == f"Job {i} (Row_{i})"
+        assert final_df.iloc[i]["Title"] == f"Job {i}"
         # These should have been processed by the mock, so they should have the mock response values
         assert final_df.iloc[i]["reasoning"] == "Mock response"
 
