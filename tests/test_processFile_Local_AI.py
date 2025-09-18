@@ -568,7 +568,7 @@ def test_process_job_postings_resume(tmpdir):
     assert final_df.iloc[4]["desired_flexibility"] == 0
     
     # 6. Assert that new batches are saved correctly
-    # With BATCH_SIZE=2 and 5 total records, we should have batch_1 (from existing) and batch_2, batch_3
+    # With BATCH_SIZE=2 and 5 total records, we should have batch_1 (existing), batch_2, batch_3
     # But the existing batch_1 is not overwritten, so we should have batch_2 and batch_3 created by the process
     # Actually, the logic in save_batches saves when len(results) % batch_size == 0 and len(results) > 0
     # After processing 3 records (including existing 2), we have 3 results. 3 % 2 != 0, so no batch saved yet for new data.
@@ -594,6 +594,7 @@ def test_process_job_postings_resume(tmpdir):
     batch_final_df = pd.read_excel(batch_final_file)
     assert len(batch_final_df) == 5
     assert batch_final_df.iloc[4]["Title"] == "Job 5 (Row_4)"
+
 
 def test_process_job_postings_resume_incomplete(tmpdir):
     """Test process_job_postings resumes correctly after a force stop."""
@@ -683,6 +684,7 @@ def test_process_job_postings_resume_incomplete(tmpdir):
         assert final_df.iloc[i]["Title"] == f"Job {i}"
         # These should have been processed by the mock, so they should have the mock response values
         assert final_df.iloc[i]["reasoning"] == "Mock response"
+
 
 if __name__ == "__main__":
     pytest.main([__file__])

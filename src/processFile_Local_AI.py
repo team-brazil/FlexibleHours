@@ -12,10 +12,10 @@ from openpyxl.styles import PatternFill
 
 
 # === CONFIGURATION ===
-# Obter o diretório do script atual
+# Get the directory of the current script
 SCRIPT_DIR = os.path.dirname(os.path.abspath(__file__))
 
-# Construir caminhos relativos ao diretório do script
+# Build paths relative to the script directory
 INPUT_DIR_NAME_FILE = os.path.join(SCRIPT_DIR, "..", "input", "first_500_unit_lightcast_sample.csv")
 OLLAMA_URL = "http://localhost:11434/api/generate"
 MODEL_NAME = "qwen3:8b"
@@ -38,7 +38,7 @@ logging.basicConfig(
     format="%(asctime)s - %(levelname)s - %(message)s",
     handlers=[
         logging.FileHandler(LOG_FILE)
-        # Removido StreamHandler para que os logs não apareçam no terminal
+        # Removed StreamHandler so logs don't appear in terminal
     ]
 )
 
@@ -173,7 +173,7 @@ def safe_parse_json(llm_output):
     match = re.search(r'(\{[\s\S]+\})', llm_output)
     if match:
         json_str = match.group(1)
-        # Verificar se é apenas chaves vazias
+        # Check if it's just empty braces
         if json_str.strip() == "{}":
             return {}
             
@@ -192,7 +192,7 @@ def safe_parse_json(llm_output):
     logging.warning(f"Could not parse JSON:\n{llm_output}")
     return None
 
-# --------- RESPONSE VALITADION ---------
+# --------- RESPONSE VALIDATION ---------
 
 def validate_response(parsed_response):
     """
@@ -342,7 +342,7 @@ def save_batches(results, batch_size, save_path_prefix):
         batch_number = len(results) // batch_size
         df = pd.DataFrame(results)
         save_path = f"{save_path_prefix}_{batch_number}.xlsx"
-        # Criar diretório se não existir
+        # Create directory if it doesn't exist
         os.makedirs(os.path.dirname(save_path), exist_ok=True)
         df.to_excel(save_path, index=False)
         logging.info(f"Batch saved: {save_path}")
@@ -385,7 +385,7 @@ def color_excel(path, col="undesired_flexibility"):
 
 # ----------- MAIN PIPELINE -----------
 def process_job_postings(input_path):
-    # Criar diretórios de saída se não existirem
+    # Create output directories if they don't exist
     os.makedirs(OUTPUT_PATH, exist_ok=True)
     os.makedirs(os.path.dirname(BATCH_SAVE_PREFIX), exist_ok=True)
     
@@ -504,13 +504,41 @@ def process_job_postings(input_path):
 
 
 def ollama_warmup():
+    logging.info("Checking Ollama service and model availability...")
+    
+    # Check if Ollama is running
+    try:
+        response = httpx.get("http://localhost:11434/api/tags", timeout=30)
+        if response.status_code != 200:
+            logging.error(f"Ollama service is not responding. Status code: {response.status_code}")
+            raise SystemExit("Error: Ollama service is not running. Please start Ollama and try again.")
+    except httpx.RequestError as e:
+        logging.error(f"Failed to connect to Ollama service: {e}")
+        raise SystemExit("Error: Could not connect to Ollama service. Please ensure Ollama is installed and running.")
+    except Exception as e:
+        logging.error(f"Unexpected error when checking Ollama service: {e}")
+        raise SystemExit("Error: Unexpected error when checking Ollama service.")
+    
+    # Check if the specified model is available
+    try:
+        models = response.json().get("models", [])
+        model_names = [model.get("name") for model in models]
+        if MODEL_NAME not in model_names:
+            logging.error(f"Model '{MODEL_NAME}' is not available in Ollama.")
+            raise SystemExit(f"Error: Model '{MODEL_NAME}' is not available. Please pull the model using 'ollama pull {MODEL_NAME}' and try again.")
+    except Exception as e:
+        logging.error(f"Error checking model availability: {e}")
+        raise SystemExit("Error: Could not verify model availability.")
+    
+    # Warm up the model with a dummy request
     logging.info("Warming up the model with a dummy request...")
     dummy_prompt = "Respond ONLY with OK."
     try:
         _ = call_ollama_api(dummy_prompt, temperature)
         logging.info("Ollama model is warm and ready!")
     except Exception as e:
-        logging.warning(f"Warm-up failed: {e}")
+        logging.error(f"Warm-up failed: {e}")
+        raise SystemExit("Error: Failed to warm up the model. Please check Ollama logs for more information.")
 
 
 def keep_ollama_alive(interval_minutes=30):

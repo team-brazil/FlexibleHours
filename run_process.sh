@@ -1,33 +1,33 @@
 #!/bin/bash
 
-# Script para configurar executar o processFile_Local_AI.py
+# Script to set up and run processFile_Local_AI.py
 
-# Verificar se o diretório .venv existe
+# Check if .venv directory exists
 if [ ! -d ".venv" ]; then
-    echo "Criando ambiente virtual..."
+    echo "Creating virtual environment..."
     python3 -m venv .venv
     
-    # Ativar o ambiente virtual
+    # Activate virtual environment
     source .venv/bin/activate
     
-    # Atualizar pip
+    # Update pip
     pip install --upgrade pip
     
-    # Instalar dependências
+    # Install dependencies
     if [ -f "requirements.txt" ]; then
-        echo "Instalando dependências..."
+        echo "Installing dependencies..."
         pip install -r requirements.txt
     else
-        echo "Arquivo requirements.txt não encontrado."
+        echo "requirements.txt file not found."
         exit 1
     fi
 else
-    echo "Ambiente virtual já existe."
+    echo "Virtual environment already exists."
     source .venv/bin/activate
 fi
 
-# Executar o script Python
-echo "Executando src/processFile_Local_AI.py..."
+# Run the Python script
+echo "Running src/processFile_Local_AI.py..."
 python src/processFile_Local_AI.py
 
-echo "Script concluído."
+echo "Script completed."
