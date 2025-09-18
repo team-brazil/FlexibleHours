@@ -16,7 +16,7 @@ from openpyxl.styles import PatternFill
 SCRIPT_DIR = os.path.dirname(os.path.abspath(__file__))
 
 # Construir caminhos relativos ao diretório do script
-INPUT_DIR_NAME_FILE = os.path.join(SCRIPT_DIR, "..", "input", "1000_unit_lightcast_sample.csv")
+INPUT_DIR_NAME_FILE = os.path.join(SCRIPT_DIR, "..", "input", "first_500_unit_lightcast_sample.csv")
 OLLAMA_URL = "http://localhost:11434/api/generate"
 MODEL_NAME = "qwen3:8b"
 OUTPUT_PATH = os.path.join(SCRIPT_DIR, "..", "output", "results")
@@ -273,6 +273,69 @@ def load_existing_batches(save_path_prefix):
     return results, last_processed_index
 
 
+def load_all_processed_batches(save_path_prefix, exclude_final=False):
+    """
+    Load all processed batch files and combine them into a single dataframe.
+    This function is used for generating the final output file.
+    Returns a combined dataframe of all processed batches.
+    """
+    # Find all batch files
+    batch_files = glob.glob(f"{save_path_prefix}_*.xlsx")
+    
+    # If exclude_final is True, filter out the final batch file
+    if exclude_final:
+        batch_files = [f for f in batch_files if not f.endswith("_final.xlsx")]
+    
+    # Sort by batch number
+    def extract_batch_number(filename):
+        try:
+            # Handle the special case of "_final.xlsx" files
+            if filename.endswith("_final.xlsx"):
+                # Return a very large number to ensure final files are sorted last
+                return float('inf')
+            return int(filename.split('_')[-1].split('.')[0])
+        except:
+            return -1
+    
+    batch_files.sort(key=extract_batch_number)
+    
+    # Load all batch files and combine them, keeping only unique records
+    all_records = []
+    seen_titles = set()
+    
+    for batch_file in batch_files:
+        try:
+            df = pd.read_excel(batch_file)
+            # Iterate through records and add only unique ones
+            for _, record in df.iterrows():
+                title = record.get("Title", "")
+                # Extract the row index from the title if it exists
+                if " (Row_" in title:
+                    # Use the row index as the unique identifier
+                    row_index = title.split(" (Row_")[-1].rstrip(")")
+                    unique_key = row_index
+                else:
+                    # Use the title as the unique identifier
+                    unique_key = title
+                
+                # Add the record if we haven't seen this key before
+                if unique_key not in seen_titles:
+                    seen_titles.add(unique_key)
+                    all_records.append(record.to_dict())
+            logging.info(f"Loaded batch file: {batch_file}")
+        except Exception as e:
+            logging.warning(f"Could not load batch file {batch_file}: {e}")
+    
+    # Create a dataframe from the unique records
+    if all_records:
+        combined_df = pd.DataFrame(all_records)
+        logging.info(f"Combined batch files into a single dataframe with {len(combined_df)} unique records")
+        return combined_df
+    else:
+        logging.warning("No batch files found to combine")
+        return pd.DataFrame()
+
+
 # ----------- SAVE BATCHES -----------
 def save_batches(results, batch_size, save_path_prefix):
     if len(results) % batch_size == 0 and len(results) > 0:
@@ -411,24 +474,33 @@ def process_job_postings(input_path):
         
     pbar.close()
 
-    # Save remaining records at the end
+    # Save remaining records at the end as a regular batch
     if len(results) % BATCH_SIZE != 0:
+        # Save the final batch with all results
         df_final = pd.DataFrame(results)
-        # Remove row index from Title in final batch output
-        df_final["Title"] = df_final["Title"].str.replace(r" \(Row_\d+\)", "", regex=True)
-        save_path = f"{BATCH_SAVE_PREFIX}_final.xlsx"
+        save_path = f"{BATCH_SAVE_PREFIX}_{(len(results) // BATCH_SIZE) + 1}.xlsx"
         df_final.to_excel(save_path, index=False)
-        logging.info(f"Final batch saved: {save_path}")
+        logging.info(f"Final regular batch saved: {save_path}")
+    
+    # Save a separate "final" batch file
+    df_final_all = pd.DataFrame(results)
+    save_path_final = f"{BATCH_SAVE_PREFIX}_final.xlsx"
+    df_final_all.to_excel(save_path_final, index=False)
+    logging.info(f"Final batch saved: {save_path_final}")
 
-    # Save the full output
-    df_final = pd.DataFrame(results)
-    # Remove row index from Title in final output
-    df_final["Title"] = df_final["Title"].str.replace(r" \(Row_\d+\)", "", regex=True)
-    df_final.to_excel(FINAL_FILE_PATH, index=False)
-    logging.info(f"Full file saved: {FINAL_FILE_PATH}")
+    # Save the full output by loading all processed batches (excluding the final batch file)
+    df_final = load_all_processed_batches(BATCH_SAVE_PREFIX, exclude_final=True)
+    if not df_final.empty:
+        # Remove row index from Title in final output if it exists
+        if "Title" in df_final.columns:
+            df_final["Title"] = df_final["Title"].str.replace(r" \(Row_\d+\)", "", regex=True)
+        df_final.to_excel(FINAL_FILE_PATH, index=False)
+        logging.info(f"Full file saved: {FINAL_FILE_PATH}")
 
-    # Color the 'undesired_flexibility' column in the final Excel file
-    color_excel(FINAL_FILE_PATH, col="undesired_flexibility")
+        # Color the 'undesired_flexibility' column in the final Excel file
+        color_excel(FINAL_FILE_PATH, col="undesired_flexibility")
+    else:
+        logging.warning("No data to save in final file")
 
 
 def ollama_warmup():
@@ -462,4 +534,4 @@ if __name__ == "__main__":
     process_job_postings(input_file)
     logging.info(f"Log file saved at: {LOG_FILE}")
     print(f"Log file saved at: {LOG_FILE}")
-    clear_results_folder()
+    # clear_results_folder()

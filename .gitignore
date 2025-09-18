@@ -11,3 +11,4 @@ htmlcov/
 .pytest_cache/
 *.cover
 coverage.xml
+input/first_500_unit_lightcast_sample.csv
