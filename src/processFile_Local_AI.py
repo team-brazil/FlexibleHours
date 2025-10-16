@@ -9,6 +9,7 @@ from tqdm import tqdm
 from datetime import datetime
 from openpyxl import load_workbook
 from openpyxl.styles import PatternFill
+import pyarrow.parquet as pq
 
 
 # === CONFIGURATION ===
@@ -16,7 +17,7 @@ from openpyxl.styles import PatternFill
 SCRIPT_DIR = os.path.dirname(os.path.abspath(__file__))
 
 # Build paths relative to the script directory
-INPUT_DIR_NAME_FILE = os.path.join(SCRIPT_DIR, "..", "input", "first_500_unit_lightcast_sample.csv")
+INPUT_DIR_NAME_FILE = os.path.join(SCRIPT_DIR, "..", "input", "llm_trainer.xlsx")
 OLLAMA_URL = "http://localhost:11434/api/generate"
 MODEL_NAME = "qwen3:8b"
 OUTPUT_PATH = os.path.join(SCRIPT_DIR, "..", "output", "results")
@@ -41,6 +42,95 @@ logging.basicConfig(
         # Removed StreamHandler so logs don't appear in terminal
     ]
 )
+
+
+def read_file_adaptive(file_path, **kwargs):
+    """
+    Reads input files adaptively, automatically detecting the file format
+    and using the appropriate pandas function to load the data as a dataframe.
+    
+    Parameters:
+    - file_path: Path to the file to be read
+    - **kwargs: Additional parameters to pass to specific reading functions
+    
+    Returns:
+    - pandas DataFrame with the file data
+    
+    Supports formats:
+    - CSV (.csv)
+    - Excel (.xls, .xlsx, .xlsm, .xlsb, .odf, .ods, .odt)
+    - JSON (.json)
+    - Parquet (.parquet, .parq)
+    - Pickle (.pkl, .pickle)
+    - TSV (.tsv) - as CSV with tab as delimiter
+    """
+    # Check if file exists
+    if not os.path.exists(file_path):
+        raise FileNotFoundError(f"File not found: {file_path}")
+    
+    # Get file extension
+    file_extension = os.path.splitext(file_path)[1].lower()
+    
+    # Mapping of extensions to reading functions
+    readers = {
+        '.csv': pd.read_csv,
+        '.tsv': lambda path, **args: pd.read_csv(path, sep='\t', **args),
+        '.xlsx': pd.read_excel,
+        '.xls': pd.read_excel,
+        '.xlsm': pd.read_excel,
+        '.xlsb': pd.read_excel,
+        '.odf': pd.read_excel,
+        '.ods': pd.read_excel,
+        '.odt': pd.read_excel,
+        '.json': pd.read_json,
+        '.parquet': lambda path, **args: pd.read_parquet(path, **args),
+        '.parq': lambda path, **args: pd.read_parquet(path, **args),
+        '.pkl': pd.read_pickle,
+        '.pickle': pd.read_pickle,
+    }
+    
+    # Check if extension is supported
+    if file_extension not in readers:
+        # Try content detection if extension is unknown
+        try:
+            return _detect_and_read_by_content(file_path, **kwargs)
+        except:
+            raise ValueError(f"Unsupported file format: {file_extension}")
+    
+    # Get the appropriate reading function
+    reader_func = readers[file_extension]
+    
+    try:
+        # Call the reading function with additional parameters
+        df = reader_func(file_path, **kwargs)
+        logging.info(f"File {file_path} read successfully. Format: {file_extension}, Shape: {df.shape}")
+        return df
+    except Exception as e:
+        # Error handling for corrupted files or reading problems
+        logging.error(f"Error reading file {file_path}: {str(e)}")
+        raise e
+
+
+def _detect_and_read_by_content(file_path, **kwargs):
+    """
+    Helper function for content-based file format detection.
+    """
+    # Try reading the first bytes for format detection
+    with open(file_path, 'rb') as f:
+        header = f.read(1024)  # Read the first 1024 bytes
+    
+    # Try to detect JSON format
+    header_str = header.decode('utf-8', errors='ignore').strip()
+    if header_str.startswith('{') or header_str.startswith('['):
+        return pd.read_json(file_path, **kwargs)
+    
+    # Try to detect CSV/TSV format by common patterns
+    if ',' in header_str or '\t' in header_str:
+        # Probably CSV or TSV, try reading as CSV by default
+        return pd.read_csv(file_path, **kwargs)
+    
+    # If format cannot be detected, raise exception
+    raise ValueError(f"File format not automatically detected: {file_path}")
 
 
 # ----------- condense_description (kept) ------------
@@ -401,12 +491,11 @@ def process_job_postings(input_path):
         results = []
         resume_from = 0
     
-    if input_path.endswith(".xlsx"):
-        df = pd.read_excel(input_path)
-    elif input_path.endswith(".csv"):
-        df = pd.read_csv(input_path)
-    else:
-        logging.error("Invalid file or filetype")
+    # Usar a função adaptativa para ler o arquivo
+    try:
+        df = read_file_adaptive(input_path)
+    except Exception as e:
+        logging.error(f"Erro ao ler o arquivo de entrada {input_path}: {str(e)}")
         return
     
     df.columns = [column.upper() for column in df.columns]

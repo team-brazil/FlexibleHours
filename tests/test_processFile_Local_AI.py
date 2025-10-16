@@ -686,5 +686,96 @@ def test_process_job_postings_resume_incomplete(tmpdir):
         assert final_df.iloc[i]["reasoning"] == "Mock response"
 
 
+def test_read_file_adaptive_csv():
+    """Testa a função read_file_adaptive com um arquivo CSV temporário."""
+    import tempfile
+    with tempfile.NamedTemporaryFile(mode='w', suffix='.csv', delete=False) as tmp:
+        tmp.write("col1,col2,col3\n1,2,3\n4,5,6\n")
+        tmp_path = tmp.name
+    
+    try:
+        df = processor.read_file_adaptive(tmp_path)
+        assert isinstance(df, pd.DataFrame)
+        assert df.shape == (2, 3)
+        assert list(df.columns) == ['col1', 'col2', 'col3']
+    finally:
+        os.remove(tmp_path)
+
+
+def test_read_file_adaptive_xlsx():
+    """Testa a função read_file_adaptive com um arquivo XLSX temporário."""
+    import tempfile
+    with tempfile.NamedTemporaryFile(suffix='.xlsx', delete=False) as tmp:
+        tmp_path = tmp.name
+    
+    try:
+        # Criar um DataFrame e salvá-lo como Excel
+        df_original = pd.DataFrame({'col1': [1, 4], 'col2': [2, 5], 'col3': [3, 6]})
+        df_original.to_excel(tmp_path, index=False)
+        
+        # Ler com a função adaptativa
+        df = processor.read_file_adaptive(tmp_path)
+        assert isinstance(df, pd.DataFrame)
+        assert df.shape == (2, 3)
+        assert list(df.columns) == ['col1', 'col2', 'col3']
+    finally:
+        os.remove(tmp_path)
+
+
+def test_read_file_adaptive_json():
+    """Testa a função read_file_adaptive com um arquivo JSON temporário."""
+    import tempfile
+    import json
+    data = [{"col1": 1, "col2": 2, "col3": 3}, {"col1": 4, "col2": 5, "col3": 6}]
+    
+    with tempfile.NamedTemporaryFile(mode='w', suffix='.json', delete=False) as tmp:
+        json.dump(data, tmp)
+        tmp_path = tmp.name
+    
+    try:
+        df = processor.read_file_adaptive(tmp_path)
+        assert isinstance(df, pd.DataFrame)
+        assert df.shape == (2, 3)
+        assert list(df.columns) == ['col1', 'col2', 'col3']
+    finally:
+        os.remove(tmp_path)
+
+
+def test_read_file_adaptive_unsupported_format():
+    """Testa o tratamento de formato não suportado na função read_file_adaptive."""
+    import tempfile
+    with tempfile.NamedTemporaryFile(mode='w', suffix='.txt', delete=False) as tmp:
+        tmp.write("test content")
+        tmp_path = tmp.name
+    
+    try:
+        with pytest.raises(ValueError, match="Formato de arquivo não suportado"):
+            processor.read_file_adaptive(tmp_path)
+    finally:
+        os.remove(tmp_path)
+
+
+def test_read_file_adaptive_file_not_found():
+    """Testa o tratamento de arquivo não encontrado na função read_file_adaptive."""
+    with pytest.raises(FileNotFoundError, match="Arquivo não encontrado"):
+        processor.read_file_adaptive("/path/that/does/not/exist.csv")
+
+
+def test_read_file_adaptive_with_kwargs():
+    """Testa a leitura de CSV com parâmetros adicionais usando read_file_adaptive."""
+    import tempfile
+    with tempfile.NamedTemporaryFile(mode='w', suffix='.csv', delete=False) as tmp:
+        tmp.write("1,2,3\n4,5,6\n")
+        tmp_path = tmp.name
+    
+    try:
+        df = processor.read_file_adaptive(tmp_path, header=None, names=['a', 'b', 'c'])
+        assert isinstance(df, pd.DataFrame)
+        assert df.shape == (2, 3)
+        assert list(df.columns) == ['a', 'b', 'c']
+    finally:
+        os.remove(tmp_path)
+
+
 if __name__ == "__main__":
     pytest.main([__file__])
