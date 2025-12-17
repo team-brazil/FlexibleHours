@@ -12,3 +12,5 @@ htmlcov/
 *.cover
 coverage.xml
 input/first_500_unit_lightcast_sample.csv
+data backup
+input

@@ -17,18 +17,19 @@ import pyarrow.parquet as pq
 SCRIPT_DIR = os.path.dirname(os.path.abspath(__file__))
 
 # Build paths relative to the script directory
-INPUT_DIR_NAME_FILE = os.path.join(SCRIPT_DIR, "..", "input", "llm_trainer.xlsx")
+INPUT_DIR = os.path.join(SCRIPT_DIR, "..", "input")
 OLLAMA_URL = "http://localhost:11434/api/generate"
 MODEL_NAME = "qwen3:8b"
 OUTPUT_PATH = os.path.join(SCRIPT_DIR, "..", "output", "results")
 LOG_PATH = os.path.join(SCRIPT_DIR, "..", "logs")
-FINAL_FILE_PATH = os.path.join(OUTPUT_PATH, f"Job_postings_processed_{MODEL_NAME}.xlsx")
+# FINAL_FILE_PATH will be determined per file
 temperature = 0
+
 NUM_PREDICT = 200
 MAX_RETRIES = 2
 RETRY_SLEEP = 3
 BATCH_SIZE = 20   # Save every N records
-BATCH_SAVE_PREFIX = os.path.join(OUTPUT_PATH, "batch_temp")
+BATCH_SAVE_DIR = os.path.join(OUTPUT_PATH, "batch_temp")
 os.makedirs(OUTPUT_PATH, exist_ok=True)
 os.makedirs(LOG_PATH, exist_ok=True)
 
@@ -475,12 +476,24 @@ def color_excel(path, col="undesired_flexibility"):
 
 # ----------- MAIN PIPELINE -----------
 def process_job_postings(input_path):
+    filename = os.path.basename(input_path)
+    filename_no_ext = os.path.splitext(filename)[0]
+    # Handle .tar.gz or .csv.gz double extensions if needed, though simple splitext handles the last one.
+    if filename.endswith(".csv.gz"):
+        filename_no_ext = filename[:-7]
+    
+    logging.info(f"Processing file: {input_path}")
+    
+    # Unique batch prefix for this file
+    batch_save_prefix = os.path.join(BATCH_SAVE_DIR, f"{filename_no_ext}_batch")
+    final_file_path = os.path.join(OUTPUT_PATH, f"{filename_no_ext}_processed_{MODEL_NAME}.xlsx")
+
     # Create output directories if they don't exist
     os.makedirs(OUTPUT_PATH, exist_ok=True)
-    os.makedirs(os.path.dirname(BATCH_SAVE_PREFIX), exist_ok=True)
+    os.makedirs(BATCH_SAVE_DIR, exist_ok=True)
     
     # Check if there are existing batch files to resume from
-    existing_results, last_processed_index = load_existing_batches(BATCH_SAVE_PREFIX)
+    existing_results, last_processed_index = load_existing_batches(batch_save_prefix)
     
     if existing_results:
         logging.info(f"Resuming from existing batches. Last processed index: {last_processed_index}")
@@ -491,11 +504,11 @@ def process_job_postings(input_path):
         results = []
         resume_from = 0
     
-    # Usar a função adaptativa para ler o arquivo
+    # Use the adaptive function to read the file
     try:
         df = read_file_adaptive(input_path)
     except Exception as e:
-        logging.error(f"Erro ao ler o arquivo de entrada {input_path}: {str(e)}")
+        logging.error(f"Error reading input file {input_path}: {str(e)}")
         return
     
     df.columns = [column.upper() for column in df.columns]
@@ -559,7 +572,7 @@ def process_job_postings(input_path):
             "reasoning": reasoning
         }
         results.append(record)
-        save_batches(results, BATCH_SIZE, BATCH_SAVE_PREFIX)
+        save_batches(results, BATCH_SIZE, batch_save_prefix)
         
     pbar.close()
 
@@ -567,27 +580,27 @@ def process_job_postings(input_path):
     if len(results) % BATCH_SIZE != 0:
         # Save the final batch with all results
         df_final = pd.DataFrame(results)
-        save_path = f"{BATCH_SAVE_PREFIX}_{(len(results) // BATCH_SIZE) + 1}.xlsx"
+        save_path = f"{batch_save_prefix}_{(len(results) // BATCH_SIZE) + 1}.xlsx"
         df_final.to_excel(save_path, index=False)
         logging.info(f"Final regular batch saved: {save_path}")
     
     # Save a separate "final" batch file
     df_final_all = pd.DataFrame(results)
-    save_path_final = f"{BATCH_SAVE_PREFIX}_final.xlsx"
+    save_path_final = f"{batch_save_prefix}_final.xlsx"
     df_final_all.to_excel(save_path_final, index=False)
     logging.info(f"Final batch saved: {save_path_final}")
 
     # Save the full output by loading all processed batches (excluding the final batch file)
-    df_final = load_all_processed_batches(BATCH_SAVE_PREFIX, exclude_final=True)
+    df_final = load_all_processed_batches(batch_save_prefix, exclude_final=True)
     if not df_final.empty:
         # Remove row index from Title in final output if it exists
         if "Title" in df_final.columns:
             df_final["Title"] = df_final["Title"].str.replace(r" \(Row_\d+\)", "", regex=True)
-        df_final.to_excel(FINAL_FILE_PATH, index=False)
-        logging.info(f"Full file saved: {FINAL_FILE_PATH}")
+        df_final.to_excel(final_file_path, index=False)
+        logging.info(f"Full file saved: {final_file_path}")
 
         # Color the 'undesired_flexibility' column in the final Excel file
-        color_excel(FINAL_FILE_PATH, col="undesired_flexibility")
+        color_excel(final_file_path, col="undesired_flexibility")
     else:
         logging.warning("No data to save in final file")
 
@@ -638,17 +651,33 @@ def keep_ollama_alive(interval_minutes=30):
 
 
 # ----------- MAIN EXECUTION -----------
+
+def run_batch_processing(input_dir):
+    # Recursive search for .csv.gz files
+    search_pattern = os.path.join(input_dir, "**", "*.csv.gz")
+    files_to_process = glob.glob(search_pattern, recursive=True)
+    
+    if not files_to_process:
+        logging.warning(f"No .csv.gz files found in {input_dir}")
+        print(f"No .csv.gz files found in {input_dir}")
+    else:
+        logging.info(f"Found {len(files_to_process)} files to process.")
+        print(f"Found {len(files_to_process)} files to process.")
+        
+        for input_file in files_to_process:
+            try:
+                print(f"Starting processing for: {input_file}")
+                process_job_postings(input_file)
+                print(f"Finished processing for: {input_file}")
+            except Exception as e:
+                logging.error(f"Failed to process {input_file}: {e}")
+                print(f"Failed to process {input_file}: {e}")
+
+# ----------- MAIN EXECUTION -----------
 if __name__ == "__main__":
-    # Check if there are existing batch files before clearing
-    existing_batches = glob.glob(f"{BATCH_SAVE_PREFIX}_*.xlsx")
-    
-    if not existing_batches:
-        # Only clear results folder if there are no existing batches
-        clear_results_folder()
-    
     ollama_warmup()
-    input_file = os.path.join(INPUT_DIR_NAME_FILE)
-    process_job_postings(input_file)
+    run_batch_processing(INPUT_DIR)
+
     logging.info(f"Log file saved at: {LOG_FILE}")
     print(f"Log file saved at: {LOG_FILE}")
     # clear_results_folder()
