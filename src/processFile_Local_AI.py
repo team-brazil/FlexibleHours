@@ -482,11 +482,22 @@ def process_job_postings(input_path):
     if filename.endswith(".csv.gz"):
         filename_no_ext = filename[:-7]
     
+    # Create a path-friendly string from the input path (excluding the filename)
+    input_dir_path = os.path.dirname(input_path)
+    # Get relative path from the main directory to include folder structure in output name
+    relative_path = os.path.relpath(input_dir_path, start=os.path.dirname(SCRIPT_DIR))
+    # Replace path separators with underscores to create a safe filename
+    path_structure = relative_path.replace(os.sep, '_').replace('/', '_')
+    
     logging.info(f"Processing file: {input_path}")
     
-    # Unique batch prefix for this file
-    batch_save_prefix = os.path.join(BATCH_SAVE_DIR, f"{filename_no_ext}_batch")
-    final_file_path = os.path.join(OUTPUT_PATH, f"{filename_no_ext}_processed_{MODEL_NAME}.xlsx")
+    # Unique batch prefix for this file, including folder structure in the name
+    if relative_path != ".":
+        batch_save_prefix = os.path.join(BATCH_SAVE_DIR, f"{path_structure}_{filename_no_ext}_batch")
+        final_file_path = os.path.join(OUTPUT_PATH, f"{path_structure}_{filename_no_ext}_processed_{MODEL_NAME}.xlsx")
+    else:
+        batch_save_prefix = os.path.join(BATCH_SAVE_DIR, f"{filename_no_ext}_batch")
+        final_file_path = os.path.join(OUTPUT_PATH, f"{filename_no_ext}_processed_{MODEL_NAME}.xlsx")
 
     # Create output directories if they don't exist
     os.makedirs(OUTPUT_PATH, exist_ok=True)
