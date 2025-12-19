@@ -499,6 +499,13 @@ def process_job_postings(input_path):
         batch_save_prefix = os.path.join(BATCH_SAVE_DIR, f"{filename_no_ext}_batch")
         final_file_path = os.path.join(OUTPUT_PATH, f"{filename_no_ext}_processed_{MODEL_NAME}.xlsx")
 
+
+    # Check if final file already exists
+    if os.path.exists(final_file_path):
+        logging.info(f"File already processed: {final_file_path}. Skipping.")
+        print(f"File already processed: {final_file_path}. Skipping.")
+        return
+
     # Create output directories if they don't exist
     os.makedirs(OUTPUT_PATH, exist_ok=True)
     os.makedirs(BATCH_SAVE_DIR, exist_ok=True)

@@ -779,3 +779,30 @@ def test_read_file_adaptive_with_kwargs():
 
 if __name__ == "__main__":
     pytest.main([__file__])
+def test_process_job_postings_skips_existing(tmpdir):
+    """Test that process_job_postings skips processing if final file exists."""
+    input_file = tmpdir.join("input.csv")
+    input_file.write("TITLE_NAME,BODY\nJob 1,Desc 1")
+    
+    output_path = tmpdir.mkdir("output").strpath
+    model_name = "test_model"
+    # We patch os.path.relpath to return "." so the filename is simple
+    final_filename = f"input_processed_{model_name}.xlsx"
+    final_file_path = os.path.join(output_path, final_filename)
+    
+    # Create the "existing" final file
+    pd.DataFrame({"Title": ["Job 1"]}).to_excel(final_file_path, index=False)
+    
+    import processFile_Local_AI as processor_module
+    
+    # Patch configuration and relpath
+    with patch.dict(processor_module.__dict__, {
+        'OUTPUT_PATH': output_path,
+        'MODEL_NAME': model_name,
+        'BATCH_SAVE_DIR': tmpdir.mkdir("batch_temp").strpath
+    }):
+        with patch('os.path.relpath', return_value="."):
+            # Mock read_file_adaptive to assert it's NOT called
+            with patch('processFile_Local_AI.read_file_adaptive') as mock_read:
+                processor_module.process_job_postings(input_file.strpath)
+                mock_read.assert_not_called()
