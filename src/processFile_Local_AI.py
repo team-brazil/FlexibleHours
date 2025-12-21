@@ -10,6 +10,7 @@ from datetime import datetime
 from openpyxl import load_workbook
 from openpyxl.styles import PatternFill
 import pyarrow.parquet as pq
+import gc
 
 
 # === CONFIGURATION ===
@@ -24,6 +25,7 @@ OUTPUT_PATH = os.path.join(SCRIPT_DIR, "..", "output", "results")
 LOG_PATH = os.path.join(SCRIPT_DIR, "..", "logs")
 # FINAL_FILE_PATH will be determined per file
 temperature = 0
+COOLDOWN = 0.5  # Seconds to wait between API calls
 
 NUM_PREDICT = 200
 MAX_RETRIES = 2
@@ -325,15 +327,18 @@ def clear_results_folder(path=OUTPUT_PATH, pattern="*.xlsx"):
             print(f"Could not remove {f}: {e}")
 
 
-def load_existing_batches(save_path_prefix):
+def get_resume_index(save_path_prefix):
     """
-    Load existing batch files to resume processing.
-    Returns the list of processed results and the highest processed index.
+    Determine the last processed row index by inspecting existing batch files.
+    This avoids loading the entire dataset into memory.
     """
     # Find all batch files
     batch_files = glob.glob(f"{save_path_prefix}_*.xlsx")
     
-    # Sort by batch number
+    if not batch_files:
+        return -1
+
+    # Sort to find the latest file
     def extract_batch_number(filename):
         try:
             return int(filename.split('_')[-1].split('.')[0])
@@ -341,27 +346,30 @@ def load_existing_batches(save_path_prefix):
             return -1
     
     batch_files.sort(key=extract_batch_number)
+    last_batch_file = batch_files[-1]
     
-    # Load only the last batch file, as it contains all processed records up to that point
-    results = []
-    last_processed_index = -1
-    
-    if batch_files:
-        # Get the last batch file (highest batch number)
-        last_batch_file = batch_files[-1]
-        try:
-            df = pd.read_excel(last_batch_file)
-            # Convert DataFrame to list of dictionaries
-            results = df.to_dict('records')
-            # The last processed index is the number of records in the last batch minus 1
-            last_processed_index = len(results) - 1
-            logging.info(f"Loaded {len(results)} existing records from {last_batch_file}, resuming from index {last_processed_index + 1}")
-        except Exception as e:
-            logging.warning(f"Could not load batch file {last_batch_file}: {e}")
-            results = []
-            last_processed_index = -1
-    
-    return results, last_processed_index
+    try:
+        # We only need the last few rows to find the last index
+        # However, pandas read_excel loads the whole thing. 
+        # For typical small batches (20-100), this is fast.
+        # If it's a legacy large cumulative file, it might take a moment but only happens once.
+        df = pd.read_excel(last_batch_file)
+        if df.empty:
+            return -1
+            
+        last_row = df.iloc[-1]
+        title = str(last_row.get("Title", ""))
+        
+        # Extract index from "Title Name (Row_123)"
+        import re
+        match = re.search(r"\(Row_(\d+)\)", title)
+        if match:
+            return int(match.group(1))
+            
+    except Exception as e:
+        logging.warning(f"Could not read last batch file to determine resume index: {e}")
+        
+    return -1
 
 
 def load_all_processed_batches(save_path_prefix, exclude_final=False):
@@ -428,15 +436,23 @@ def load_all_processed_batches(save_path_prefix, exclude_final=False):
 
 
 # ----------- SAVE BATCHES -----------
-def save_batches(results, batch_size, save_path_prefix):
-    if len(results) % batch_size == 0 and len(results) > 0:
-        batch_number = len(results) // batch_size
-        df = pd.DataFrame(results)
-        save_path = f"{save_path_prefix}_{batch_number}.xlsx"
+def save_batch_chunk(batch_data, batch_index, save_path_prefix):
+    """
+    Save a small chunk of data to a new file.
+    """
+    if not batch_data:
+        return
+
+    df = pd.DataFrame(batch_data)
+    save_path = f"{save_path_prefix}_{batch_index}.xlsx"
+    
+    try:
         # Create directory if it doesn't exist
         os.makedirs(os.path.dirname(save_path), exist_ok=True)
         df.to_excel(save_path, index=False)
-        logging.info(f"Batch saved: {save_path}")
+        logging.info(f"Batch chunk {batch_index} saved with {len(df)} records at: {save_path}")
+    except Exception as e:
+        logging.error(f"Failed to save batch chunk {save_path}: {e}")
 
 
 # ----------- EXCEL HIGHLIGHTING FUNCTION -----------
@@ -510,17 +526,14 @@ def process_job_postings(input_path):
     os.makedirs(OUTPUT_PATH, exist_ok=True)
     os.makedirs(BATCH_SAVE_DIR, exist_ok=True)
     
-    # Check if there are existing batch files to resume from
-    existing_results, last_processed_index = load_existing_batches(batch_save_prefix)
+    # Determine where to resume from
+    last_index = get_resume_index(batch_save_prefix)
+    resume_from = last_index + 1
     
-    if existing_results:
-        logging.info(f"Resuming from existing batches. Last processed index: {last_processed_index}")
-        results = existing_results
-        resume_from = last_processed_index + 1
+    if resume_from > 0:
+        logging.info(f"Resuming processing from row index {resume_from}")
     else:
         logging.info("Starting fresh processing")
-        results = []
-        resume_from = 0
     
     # Use the adaptive function to read the file
     try:
@@ -535,13 +548,16 @@ def process_job_postings(input_path):
     pbar = tqdm(total=len(df), initial=0)
     pbar.update(resume_from)  # Set initial position
     
+    current_batch = []
+    # Calculate initial batch index based on where we are starting
+    # e.g., if starting at 20, we are starting batch 1 (0-indexed being batch 0)
+    current_batch_index = (resume_from // BATCH_SIZE) + 1
+
     for idx, row in df.iterrows():
         # Skip already processed rows
         if idx < resume_from:
             continue
             
-        # Update progress bar description with current row index
-        # pbar.set_description(f"Processing row {idx}")
         pbar.set_postfix({"Total": len(df)})
             
         # Log the row being processed
@@ -558,6 +574,8 @@ def process_job_postings(input_path):
             response = call_ollama_api(prompt)
             parsed = safe_parse_json(response) if response else None
             validated = validate_response(parsed)
+            # Add small sleep to allow system to breathe
+            time.sleep(COOLDOWN)
             
         logging.info(f"Finished processing row {idx}")
         
@@ -589,24 +607,22 @@ def process_job_postings(input_path):
             "desired_quote": desired_quote,
             "reasoning": reasoning
         }
-        results.append(record)
-        save_batches(results, BATCH_SIZE, batch_save_prefix)
+        
+        current_batch.append(record)
+        
+        # Check if batch is full
+        if len(current_batch) >= BATCH_SIZE:
+            save_batch_chunk(current_batch, current_batch_index, batch_save_prefix)
+            current_batch = [] # Clear memory
+            current_batch_index += 1
+            gc.collect() # Force garbage collection
         
     pbar.close()
 
-    # Save remaining records at the end as a regular batch
-    if len(results) % BATCH_SIZE != 0:
-        # Save the final batch with all results
-        df_final = pd.DataFrame(results)
-        save_path = f"{batch_save_prefix}_{(len(results) // BATCH_SIZE) + 1}.xlsx"
-        df_final.to_excel(save_path, index=False)
-        logging.info(f"Final regular batch saved: {save_path}")
-    
-    # Save a separate "final" batch file
-    df_final_all = pd.DataFrame(results)
-    save_path_final = f"{batch_save_prefix}_final.xlsx"
-    df_final_all.to_excel(save_path_final, index=False)
-    logging.info(f"Final batch saved: {save_path_final}")
+    # Save any remaining records
+    if current_batch:
+        save_batch_chunk(current_batch, current_batch_index, batch_save_prefix)
+        logging.info(f"Final partial batch saved with {len(current_batch)} records")
 
     # Save the full output by loading all processed batches (excluding the final batch file)
     df_final = load_all_processed_batches(batch_save_prefix, exclude_final=True)
