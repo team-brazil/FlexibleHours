@@ -570,12 +570,20 @@ def process_job_postings(input_path):
         
         logging.info(f"Calling Ollama API for row {idx}")
         validated = False
-        while not validated:
+        attempts = 0
+        max_attempts = 3
+        while not validated and attempts < max_attempts:
+            attempts += 1
             response = call_ollama_api(prompt)
             parsed = safe_parse_json(response) if response else None
             validated = validate_response(parsed)
             # Add small sleep to allow system to breathe
             time.sleep(COOLDOWN)
+            
+        if not validated:
+            logging.warning(f"Failed to validate response for row {idx} after {max_attempts} attempts. Skipping.")
+            parsed = None
+            response = str(response) + " [FAILED VALIDATION]"
             
         logging.info(f"Finished processing row {idx}")
         
