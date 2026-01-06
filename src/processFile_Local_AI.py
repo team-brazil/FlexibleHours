@@ -31,7 +31,7 @@ MAX_RETRIES = 2
 RETRY_SLEEP = 3
 BATCH_SIZE = 20
 BATCH_SAVE_DIR = os.path.join(OUTPUT_PATH, "batch_temp")
-NUM_WORKERS = 4  # 4 Instâncias simultâneas
+NUM_WORKERS = 4
 
 os.makedirs(OUTPUT_PATH, exist_ok=True)
 os.makedirs(LOG_PATH, exist_ok=True)
